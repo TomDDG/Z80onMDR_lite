@@ -4,7 +4,8 @@ Z80onMDR_Lite - Simple ZX Spectrum Z80 snapshot to Microdrive MDR image converte
 
 A cut down version of the full Z80onMDR https://tomdalby.com/other/z80onmdr.html 
 to use with or within other utilities under the GPL3.0 licence. Only converts
-a single Z80 snapshot with minimal output and options.
+a single Z80 snapshot with minimal output and options. Works with both 48k &
+128k snapshots.
 
 Copyright (c) 2021, Tom Dalby
  
