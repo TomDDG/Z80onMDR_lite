@@ -1,9 +1,10 @@
 # Z80onMDR_lite
 
-Z80onMDR_Lite - Z80 snapshot to Microdrive MDR image converter
+Z80onMDR_Lite - Simple Z80 snapshot to Microdrive MDR image converter
 
 A cut down version of the full Z80onMDR https://tomdalby.com/other/z80onmdr.html 
-to use with or within other utilities under the GPL3.0 licence.
+to use with or within other utilities under the GPL3.0 licence. Only converts
+a single Z80 snapshot with minimal output and options.
 
 Copyright (c) 2021, Tom Dalby
  
