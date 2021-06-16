@@ -7,7 +7,7 @@ to use with or within other utilities under the GPL3.0 licence. Only converts
 a single Z80 snapshot with minimal output and options. Works with both 48k &
 128k snapshots.
 
-Copyright (c) 2021, Tom Dalby
+Copyright 2021 Tom Dalby
  
 Z80onMDR_Lite is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
