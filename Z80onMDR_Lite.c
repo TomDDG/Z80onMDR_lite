@@ -1,21 +1,21 @@
 // Z80onMDR_Lite - Z80 snapshot to Microdrive MDR image converter
 // a cut down version of the full Z80onMDR to use with or within other utilities 
+// Copyright (c) 2021, Tom Dalby
 // 
-// Copyright (C) 2021 Tom Dalby
+// Z80onMDR_Lite is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+// 
+// Z80onMDR_Lite is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU General Public License for more details.
+// 
+// You should have received a copy of the GNU General Public License
+// along with Z80onMDR_Lite. If not, see <http://www.gnu.org/licenses/>.
 //
-//    This program is free software: you can redistribute it and/or modify
-//    it under the terms of the GNU General Public License as published by
-//    the Free Software Foundation, either version 3 of the License, or
-//    (at your option) any later version.
-//
-//    This program is distributed in the hope that it will be useful,
-//    but WITHOUT ANY WARRANTY; without even the implied warranty of
-//    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-//    GNU General Public License for more details.
-//
-//    You should have received a copy of the GNU General Public License
-//    along with this program.  If not, see <https://www.gnu.org/licenses/>.
-//
+// ===============================================================
 // usage: z80onmdr_lite snapshot.z80 
 //   this will create a mdr cartridge image called snapshot.mdr
 // 
@@ -29,21 +29,24 @@
 // E07 - issue decompressing Z80 snapshot
 // E08 - cannot allocate RAM for compression
 // E09 - cannot compress main block (delta or maxsize)
+// E10 - cannot allocate RAM for storing of cartridge
+// E11 - cartridge full (unlikely with a single z80)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#define VERSION_NUM "v1"
+#define VERSION_NUM "v1.1"
 #define PROGNAME "Z80onMDR_lite"
 #define B_GAP 128
 #define MAXLENGTH 256
 #define MINLENGTH 3
 //v1 initial release based on v1.9b Z80onMDR
+//v1.1 added file interleaving, required removal of direct writing to output file
 typedef union {
 	unsigned long int rrrr; //byte number
 	unsigned char r[4]; //split number into 4 8bit bytes in case of overflow
 } rrrr;
 //
-int appendmdr(unsigned char* mdrname, unsigned char* mdrfile, FILE** mdr, unsigned char* sector, unsigned char* mdrbl, rrrr len, rrrr start, rrrr param2, unsigned char basic);
+int appendmdr(unsigned char* mdrname, unsigned char* mdrfile, unsigned char* cart, unsigned char* sector, unsigned char* mdrbl, rrrr len, rrrr start, rrrr param2, unsigned char basic);
 int dcz80(FILE** fp_in, unsigned char* out, int size);
 unsigned long zxsc(unsigned char* fload, unsigned char* store, int filesize, int screen);
 struct loj findmatch(unsigned char* buffer, unsigned char* buffer_ss); // screen layout
@@ -73,10 +76,6 @@ int main(int argc, char* argv[]) {
 	//open read/write
 	FILE* fp_in, * fp_out;
 	if ((fp_in = fopen(fz80, "rb")) == NULL) error(2); // cannot open z80 for read
-	//microdrive settings
-	unsigned char sector = 0xfe; // max size 254 sectors
-	int mdrsize = 137923; // sector * 543 + 1;
-	unsigned char mdrname[] = "Z80onMDR  ";
 	// 48k loader
 #define mdrbl48k_brd 16
 #define mdrbl48k_pap 22
@@ -334,7 +333,49 @@ int main(int argc, char* argv[]) {
 		} while (c != bankend);
 	}
 	fclose(fp_in);
-	if ((fp_out = fopen(fmdr, "wb")) == NULL) error(3); // cannot open mdr for write
+	//microdrive settings
+	unsigned char sector = 0xfe; // max size 254 sectors
+	int mdrsize = 137923; // sector * 543 + 1;
+	unsigned char mdrname[] = "Z80onMDR  ";
+	// create a blank cartridge in memory
+	unsigned char* cart;
+	if ((cart = (unsigned char*)malloc(mdrsize * sizeof(unsigned char))) == NULL) error(10); // space for the cartridge
+	rrrr chksum;
+	int j = 0;
+	do {
+		// header
+		chksum.rrrr = sector + 1;
+		cart[j++] = 0x01;
+		cart[j++] = sector--;
+		cart[j++] = 0x00;
+		cart[j++] = 0x00;
+		for (i = 0; i < 10; i++) {
+			cart[j++] = mdrname[i];
+			chksum.rrrr += mdrname[i];
+			chksum.rrrr = chksum.rrrr % 255;
+		}
+		cart[j++] = chksum.r[0];
+		// blank 2nd header
+		chksum.rrrr = 0;
+		for (i = 0; i < 14; i++) {
+			cart[j++] = 0x00;
+			chksum.rrrr += 0x00;
+			chksum.rrrr = chksum.rrrr % 255;
+		}
+		cart[j++] = chksum.r[0];
+		chksum.rrrr = 0;
+		for (i = 0; i < 512; i++) {
+			cart[j++] = 0x00;
+			chksum.rrrr += 0x00;
+			chksum.rrrr = chksum.rrrr % 255;
+		}
+		cart[j++] = chksum.r[0];
+	} while (sector > 0x00);
+	cart[j] = 0x00; // cartridge not write protected
+	sector = 0xfe;
+	// add files to blank cartridge in interleaved format which leaves a sector between each sector written, which allows 
+	// the drive to pick up the next sector quicker and as a result loads the game faster. After filling the drive it
+	// loops back to the first unused sector
 	// write run
 	rrrr start;
 	rrrr param;
@@ -344,12 +385,12 @@ int main(int argc, char* argv[]) {
 	if (otek) {
 		fprintf(stdout, "128k ");
 		len.rrrr = mdrbl128k_len;
-		i = appendmdr(mdrname, mdrfname, &fp_out, &sector, mdrbl128k, len, start, param, 0x00);
+		i = appendmdr(mdrname, mdrfname, cart, &sector, mdrbl128k, len, start, param, 0x00);
 	}
 	else {
 		fprintf(stdout, "48k ");
 		len.rrrr = mdrbl48k_len;
-		i = appendmdr(mdrname, mdrfname, &fp_out, &sector, mdrbl48k, len, start, param, 0x00);
+		i = appendmdr(mdrname, mdrfname, cart, &sector, mdrbl48k, len, start, param, 0x00);
 	}
 	fprintf(stdout, "$%02x>R(%lu)+",sector,len.rrrr);
 	mdrfname[1] = mdrfname[2] = ' ';
@@ -363,7 +404,7 @@ int main(int argc, char* argv[]) {
 	mdrfname[0] = 'S';
 	start.rrrr = 25088;
 	param.rrrr = 0xffff;
-	i = appendmdr(mdrname, mdrfname, &fp_out, &sector, comp, len, start, param, 0x03);
+	i = appendmdr(mdrname, mdrfname, cart, &sector, comp, len, start, param, 0x03);
 	fprintf(stdout, "S(%lu)+", len.rrrr);
 	free(comp);
 	//otek pages
@@ -376,7 +417,7 @@ int main(int argc, char* argv[]) {
 		mdrfname[0] = '1';
 		start.rrrr = 32256 - unpack_len;
 		param.rrrr = 0xffff;
-		i = appendmdr(mdrname, mdrfname, &fp_out, &sector, comp, len, start, param, 0x03);
+		i = appendmdr(mdrname, mdrfname, cart, &sector, comp, len, start, param, 0x03);
 		// page 3
 		mdrfname[0]++;
 		comp[0] = 0x13;
@@ -384,28 +425,28 @@ int main(int argc, char* argv[]) {
 		len.rrrr++;
 		fprintf(stdout, "3(%lu)+", len.rrrr);
 		start.rrrr = 32255; // don't need to replace the unpacker, just the page number
-		i = appendmdr(mdrname, mdrfname, &fp_out, &sector, comp, len, start, param, 0x03);
+		i = appendmdr(mdrname, mdrfname, cart, &sector, comp, len, start, param, 0x03);
 		// page 4
 		mdrfname[0]++;
 		comp[0] = 0x14;
 		len.rrrr = zxsc(&main[bank[7]], &comp[1], 16384, 0);
 		len.rrrr++;
 		fprintf(stdout, "4(%lu)+", len.rrrr);
-		i = appendmdr(mdrname, mdrfname, &fp_out, &sector, comp, len, start, param, 0x03);
+		i = appendmdr(mdrname, mdrfname, cart, &sector, comp, len, start, param, 0x03);
 		// page 6
 		mdrfname[0]++;
 		comp[0] = 0x16;
 		len.rrrr = zxsc(&main[bank[9]], &comp[1], 16384, 0);
 		len.rrrr++;
 		fprintf(stdout, "6(%lu)+", len.rrrr);
-		i = appendmdr(mdrname, mdrfname, &fp_out, &sector, comp, len, start, param, 0x03);
+		i = appendmdr(mdrname, mdrfname, cart, &sector, comp, len, start, param, 0x03);
 		// page 7
 		mdrfname[0]++;
 		comp[0] = 0x17;
 		len.rrrr = zxsc(&main[bank[10]], &comp[1], 16384, 0);
 		len.rrrr++;
 		fprintf(stdout, "7(%lu)+", len.rrrr);
-		i = appendmdr(mdrname, mdrfname, &fp_out, &sector, comp, len, start, param, 0x03);
+		i = appendmdr(mdrname, mdrfname, cart, &sector, comp, len, start, param, 0x03);
 		free(comp);
 	}
 	// main
@@ -424,7 +465,7 @@ int main(int argc, char* argv[]) {
 	mdrfname[0] = 'M';
 	start.rrrr = 65536 - len.rrrr;
 	param.rrrr = 0xffff;
-	i = appendmdr(mdrname, mdrfname, &fp_out, &sector, comp, len, start, param, 0x03);
+	i = appendmdr(mdrname, mdrfname, cart, &sector, comp, len, start, param, 0x03);
 	fprintf(stdout, "M(%lu:D%d)+", len.rrrr, delta);
 	free(comp);
 	//launcher
@@ -438,42 +479,20 @@ int main(int argc, char* argv[]) {
 	mdrfname[0] = 'L';
 	len.rrrr = launchmdr_full_len + delta;
 	start.rrrr = 16384;
-	i = appendmdr(mdrname, mdrfname, &fp_out, &sector, launchmdr_full, len, start, param, 0x03);
-	fprintf(stdout, "L(%lu)>$%02x(%d)", len.rrrr,sector,(253-sector+1)*543);
-	// pad to end of cartridge
-	rrrr chksum;
-	while (sector > 0x00) {
-		// header
-		chksum.rrrr = sector + 1;
-		fputc(0x01, fp_out);
-		fputc(sector--, fp_out);
-		fputc(0x00, fp_out);
-		fputc(0x00, fp_out);
-		for (i = 0; i < 10; i++) {
-			fputc(mdrname[i], fp_out);
-			chksum.rrrr += mdrname[i];
-			chksum.rrrr = chksum.rrrr % 255;
-		}
-		fputc(chksum.r[0], fp_out);
-		// blank 2nd header
-		chksum.rrrr = 0;
-		for (i = 0; i < 14; i++) {
-			fputc(0x00, fp_out);
-			chksum.rrrr += 0x00;
-			chksum.rrrr = chksum.rrrr % 255;
-		}
-		fputc(chksum.r[0], fp_out);
-		chksum.rrrr = 0;
-		for (i = 0; i < 512; i++) {
-			fputc(0x00, fp_out);
-			chksum.rrrr += 0x00;
-			chksum.rrrr = chksum.rrrr % 255;
-		}
-		fputc(chksum.r[0], fp_out);
+	i = appendmdr(mdrname, mdrfname, cart, &sector, launchmdr_full, len, start, param, 0x03);
+	if (sector % 2 == 0) {
+		i = 128;
 	}
-	// write tab
-	fputc(0x00, fp_out);
+	else {
+		i = 1;
+	}
+	fprintf(stdout, "L(%lu)>$%02x(%d)\n", len.rrrr,sector, ((sector / 2) + i) * 543); // ** needs updated for interleave
+	// create file and write cartridge
+	if ((fp_out = fopen(fmdr, "wb")) == NULL) error(3); // cannot open mdr for write
+	fwrite(cart, sizeof(unsigned char), mdrsize, fp_out);
 	fclose(fp_out);
+	free(cart);
+	// all done
 	return 0;
 }
 //decompress z80 snapshot routine
@@ -701,79 +720,94 @@ struct loj findmatch2(unsigned char* buffer, unsigned char* buffer_ss, int files
 	return output;
 }
 // add data to the microdrive image, needs to be added in sectors 543bytes each with headers etc...
-int appendmdr(unsigned char* mdrname, unsigned char* mdrfile, FILE **mdr, unsigned char* sector, unsigned char* code, rrrr len, rrrr start, rrrr param2, unsigned char basic) {
+//   mdrname - name of cart
+//   mdrfile - filename
+//   cart - output cartridge memory pointer
+//   sector - start sectore (where the last one left off)
+//   code - the code to write
+//   len - length of code
+//   start - 
+//   param2 - similar to tape
+//   basic - basic or code
+int appendmdr(unsigned char* mdrname, unsigned char* mdrfile, unsigned char* cart, unsigned char* sector, unsigned char* code, rrrr len, rrrr start, rrrr param2, unsigned char basic) {
 	rrrr chksum, num;
 	unsigned char sequence;
-	int i, j, codepos, numsec, spos;
+	int i, j, codepos, numsec, spos, cartpos;
 	// work out how many sectors needed
 	numsec = ((len.rrrr + 9) / 512) + 1; // +9 for initial header
 	sequence = 0x00;
 	codepos = 0;
+	// A cartridge file contains 254 'sectors' of 543 bytes each, and a final byte
+	// flag which is non-zero is the cartridge is write protected, so the total 
+	// length is 137923 bytes
+	// 
+	// each sector writen has a header
 	do {
-		// sector header
-		chksum.rrrr = *sector + 1;
-		putc(0x01, *mdr);
-		putc((*sector)--, *mdr);
-		putc(0x00, *mdr);
-		putc(0x00, *mdr);
+		// calculate position based on sector
+		// sector 254 is position 0, 253 is 543 etc...
+		cartpos = (0xfe - *sector) * 543;		// sector header
+		chksum.rrrr = *sector + 0x01;
+		cart[cartpos++] = 0x01; // header block
+		cart[cartpos++] = *sector; // sector number, starts at 254 down to 1
+		cart[cartpos++] = 0x00; // not used
+		cart[cartpos++] = 0x00; // not used
 		for (i = 0; i < 10; i++) {
-			putc(mdrname[i], *mdr);
-			chksum.rrrr += mdrname[i];
-			chksum.rrrr = chksum.rrrr % 255;
+			cart[cartpos++] = mdrname[i]; // cart name 10 length
+			chksum.rrrr += mdrname[i]; // build checksum of the first 14bytes
+			chksum.rrrr = chksum.rrrr % 255; // 
 		}
-		putc(chksum.r[0], *mdr);
-		// file header
-		//	0x06 - for end of file and data, 0x04 for data if in numerous parts
-		//	0x00 - sequence number (if file in many parts then this is the number)
-		//	0x00 0x00 - length of this part 16bit
-		//	0x00*10 - filename
-		//	0x00 - header checksum
-		if (sequence == numsec - 1) {
+		cart[cartpos++] = chksum.r[0]; // write checksum
+		// 15 byte file header
+		//	 0x06 - for end of file and data, 0x04 for data if in numerous parts
+		//	 0x00 - sequence number (if file in many parts then this is the number)
+		//	 0x00 0x00 - length of this part 16bit
+		//	 0x00*10 - filename
+		//	 0x00 - header checksum
+		if (sequence == numsec - 1) { // is this the last sector needed?
 			chksum.rrrr = 0x06;
-			putc(0x06, *mdr);
 		}
 		else {
-			chksum.rrrr = 0x04;
-			putc(0x04, *mdr);
+			chksum.rrrr = 0x04; // part
 		}
-		putc(sequence, *mdr);
-		chksum.rrrr += sequence;
+		cart[cartpos++] = chksum.rrrr;
+		cart[cartpos++] = sequence; // data block sequence
+		chksum.rrrr += sequence; // start to build checksum
 		chksum.rrrr = chksum.rrrr % 255;
 		// if length >512 then this is 512 until final part
 		if (len.rrrr > 512) {
-			num.rrrr = 512;
-			putc(num.r[0], *mdr);
+			num.rrrr = 512; // data block length (this sector) lsb
+			cart[cartpos++] = num.r[0];
 			chksum.rrrr += num.r[0];
 			chksum.rrrr = chksum.rrrr % 255;
-			putc(num.r[1], *mdr);
+			cart[cartpos++] = num.r[1];
 			chksum.rrrr += num.r[1];
 			chksum.rrrr = chksum.rrrr % 255;
 		}
-		else if (numsec > 1) {
-			putc(len.r[0], *mdr);
+		else if (numsec > 1) { // final part if length >512
+			cart[cartpos++] = len.r[0]; // data block length lsb
 			chksum.rrrr += len.r[0];
 			chksum.rrrr = chksum.rrrr % 255;
-			putc(len.r[1], *mdr);
+			cart[cartpos++] = len.r[1];
 			chksum.rrrr += len.r[1];
 			chksum.rrrr = chksum.rrrr % 255;
 		}
-		else {
+		else { // total length <512 i.e. only one sector
 			len.rrrr += 9; // add 9 for header info
-			putc(len.r[0], *mdr);
+			cart[cartpos++] = len.r[0];
 			chksum.rrrr += len.r[0];
 			chksum.rrrr = chksum.rrrr % 255;
-			putc(len.r[1], *mdr);
+			cart[cartpos++] = len.r[1];
 			chksum.rrrr += len.r[1];
 			chksum.rrrr = chksum.rrrr % 255;
 			len.rrrr -= 9;
 		}
 		// filename
 		for (i = 0; i < 10; i++) {
-			putc(mdrfile[i], *mdr);
+			cart[cartpos++] = mdrfile[i];
 			chksum.rrrr += mdrfile[i];
 			chksum.rrrr = chksum.rrrr % 255;
 		}
-		putc(chksum.r[0], *mdr);
+		cart[cartpos++] = chksum.r[0];
 		// data
 		//	512 bytes of data
 		// *note first sequence of data must have the header in the format
@@ -784,45 +818,45 @@ int appendmdr(unsigned char* mdrname, unsigned char* mdrfile, FILE **mdr, unsign
 		//  (8,9) 0x00 0x00 - line number if LINE used
 		if (sequence == 0) {
 			chksum.rrrr = basic;
-			putc(basic, *mdr);
-			putc(len.r[0], *mdr);
+			cart[cartpos++] = basic;
+			cart[cartpos++] = len.r[0];
 			chksum.rrrr += len.r[0];
 			chksum.rrrr = chksum.rrrr % 255;
-			putc(len.r[1], *mdr);
+			cart[cartpos++] = len.r[1];
 			chksum.rrrr += len.r[1];
 			chksum.rrrr = chksum.rrrr % 255;
-			putc(start.r[0], *mdr);
+			cart[cartpos++] = start.r[0];
 			chksum.rrrr += start.r[0];
 			chksum.rrrr = chksum.rrrr % 255;
-			putc(start.r[1], *mdr);
+			cart[cartpos++] = start.r[1];
 			chksum.rrrr += start.r[1];
 			chksum.rrrr = chksum.rrrr % 255;
 			// if basic
 			if (basic == 0x00) {
-				putc(len.r[0], *mdr);
+				cart[cartpos++] = len.r[0];
 				chksum.rrrr += len.r[0];
 				chksum.rrrr = chksum.rrrr % 255;
-				putc(len.r[1], *mdr);
+				cart[cartpos++] = len.r[1];
 				chksum.rrrr += len.r[1];
 				chksum.rrrr = chksum.rrrr % 255;
-				putc(param2.r[0], *mdr);
+				cart[cartpos++] = param2.r[0];
 				chksum.rrrr += param2.r[0];
 				chksum.rrrr = chksum.rrrr % 255;
-				putc(param2.r[1], *mdr);
+				cart[cartpos++] = param2.r[1];
 				chksum.rrrr += param2.r[1];
 				chksum.rrrr = chksum.rrrr % 255;
 			}
 			else {
-				putc(0xff, *mdr);
+				cart[cartpos++] = 0xff;
 				chksum.rrrr += 0xff;
 				chksum.rrrr = chksum.rrrr % 255;
-				putc(0xff, *mdr);
+				cart[cartpos++] = 0xff;
 				chksum.rrrr += 0xff;
 				chksum.rrrr = chksum.rrrr % 255;
-				putc(0xff, *mdr);
+				cart[cartpos++] = 0xff;
 				chksum.rrrr += 0xff;
 				chksum.rrrr = chksum.rrrr % 255;
-				putc(0xff, *mdr);
+				cart[cartpos++] = 0xff;
 				chksum.rrrr += 0xff;
 				chksum.rrrr = chksum.rrrr % 255;
 			}
@@ -837,7 +871,7 @@ int appendmdr(unsigned char* mdrname, unsigned char* mdrfile, FILE **mdr, unsign
 			j = 512;
 			if (sequence == 0) j -= 9;
 			for (i = 0; i < j; i++) {
-				putc(code[codepos], *mdr);
+				cart[cartpos++] = code[codepos];
 				chksum.rrrr += code[codepos++];
 				chksum.rrrr = chksum.rrrr % 255;
 				spos++;
@@ -845,17 +879,27 @@ int appendmdr(unsigned char* mdrname, unsigned char* mdrfile, FILE **mdr, unsign
 		}
 		else {
 			for (i = 0; i < len.rrrr; i++) {
-				putc(code[codepos], *mdr);
+				cart[cartpos++] = code[codepos];
 				chksum.rrrr += code[codepos++];
 				chksum.rrrr = chksum.rrrr % 255;
 				spos++;
 			}
 		}
 		// pading on last sequence
-		while (spos++ < 542) putc(0x00, *mdr); 
-		putc(chksum.r[0], *mdr);
-		if (sequence == 0) len.rrrr -= 503;
+		while (spos++ < 542) cart[cartpos++] = 0x00;
+		cart[cartpos++] = chksum.r[0];
+		if (sequence == 0) len.rrrr -= 503; // remove 9 for header
 		else len.rrrr -= 512;
+		//
+		if (*sector == 0x02) {
+			*sector = 0xfd;
+		}
+		else if (*sector == 0x01) {
+			exit(11);
+		}
+		else {
+			*sector -= 2;
+		}
 	} while (++sequence < numsec);
 	return 0;
 }
