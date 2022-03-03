@@ -34,18 +34,20 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#define VERSION_NUM "v1.1"
+#define VERSION_NUM "v1.1a"
 #define PROGNAME "Z80onMDR_lite"
 #define B_GAP 128
 #define MAXLENGTH 256
 #define MINLENGTH 3
 //v1 initial release based on v1.9b Z80onMDR
 //v1.1 added file interleaving, required removal of direct writing to output file
+//v1.1a improved file interleaving further by adding additional space between files
 typedef union {
 	unsigned long int rrrr; //byte number
 	unsigned char r[4]; //split number into 4 8bit bytes in case of overflow
 } rrrr;
 //
+int fndsector(unsigned char* sector, unsigned char* cart, int gap);
 int appendmdr(unsigned char* mdrname, unsigned char* mdrfile, unsigned char* cart, unsigned char* sector, unsigned char* mdrbl, rrrr len, rrrr start, rrrr param2, unsigned char basic);
 int dcz80(FILE** fp_in, unsigned char* out, int size);
 unsigned long zxsc(unsigned char* fload, unsigned char* store, int filesize, int screen);
@@ -383,16 +385,16 @@ int main(int argc, char* argv[]) {
 	start.rrrr = 23813;
 	param.rrrr = 0;
 	if (otek) {
-		fprintf(stdout, "128k ");
+		fprintf(stdout, "128k>");
 		len.rrrr = mdrbl128k_len;
 		i = appendmdr(mdrname, mdrfname, cart, &sector, mdrbl128k, len, start, param, 0x00);
 	}
 	else {
-		fprintf(stdout, "48k ");
+		fprintf(stdout, "48k>");
 		len.rrrr = mdrbl48k_len;
 		i = appendmdr(mdrname, mdrfname, cart, &sector, mdrbl48k, len, start, param, 0x00);
 	}
-	fprintf(stdout, "$%02x>R(%lu)+",sector,len.rrrr);
+	fprintf(stdout, "R(%lu)+",len.rrrr);
 	mdrfname[1] = mdrfname[2] = ' ';
 	// screen
 	unsigned char* comp;
@@ -486,7 +488,11 @@ int main(int argc, char* argv[]) {
 	else {
 		i = 1;
 	}
-	fprintf(stdout, "L(%lu)>$%02x(%d)\n", len.rrrr,sector, ((sector / 2) + i) * 543); // ** needs updated for interleave
+	//count blank sectors to determine space
+	for (i = 0xfe, j = 0; i > 0; i--) {
+		if (cart[(0xfe - i) * 543 + 15] == 0x00) j++;
+	}
+	fprintf(stdout, "L(%lu)>F(%d)\n", len.rrrr, j * 543); // ** needs updated for interleave
 	// create file and write cartridge
 	if ((fp_out = fopen(fmdr, "wb")) == NULL) error(3); // cannot open mdr for write
 	fwrite(cart, sizeof(unsigned char), mdrsize, fp_out);
@@ -740,12 +746,12 @@ int appendmdr(unsigned char* mdrname, unsigned char* mdrfile, unsigned char* car
 	// A cartridge file contains 254 'sectors' of 543 bytes each, and a final byte
 	// flag which is non-zero is the cartridge is write protected, so the total 
 	// length is 137923 bytes
-	// 
 	// each sector writen has a header
 	do {
 		// calculate position based on sector
 		// sector 254 is position 0, 253 is 543 etc...
-		cartpos = (0xfe - *sector) * 543;		// sector header
+		cartpos = (0xfe - *sector) * 543;		
+		// sector header
 		chksum.rrrr = *sector + 0x01;
 		cart[cartpos++] = 0x01; // header block
 		cart[cartpos++] = *sector; // sector number, starts at 254 down to 1
@@ -891,16 +897,19 @@ int appendmdr(unsigned char* mdrname, unsigned char* mdrfile, unsigned char* car
 		if (sequence == 0) len.rrrr -= 503; // remove 9 for header
 		else len.rrrr -= 512;
 		//
-		if (*sector == 0x02) {
-			*sector = 0xfd;
-		}
-		else if (*sector == 0x01) {
-			exit(11);
-		}
-		else {
-			*sector -= 2;
-		}
+		if (fndsector(sector, cart, 2) > 0) exit(11);
 	} while (++sequence < numsec);
+	// add extra blank sectors to give time for basic to process before loading next
+	if (fndsector(sector, cart, 2) > 0) exit(11);
+	return 0;
+}
+int fndsector(unsigned char* sector, unsigned char* cart, int gap) {
+	int count = 0;
+	do {
+		if (--(*sector) == 0x00) *sector = 0xfe;
+		if (++count == 254) return count; // how many sectors checked if=254 then no space on cartridge
+		if (gap > 0) gap--;
+	} while(gap||cart[(0xfe - *sector) * 543 + 15]); //if gap>0 OR not a blank sector
 	return 0;
 }
 // check compression to ensure it can be decompressed within Spectrum memory
