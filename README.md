@@ -7,9 +7,10 @@ to use with or within other utilities under the GPL3.0 licence. Only converts
 a single Z80 snapshot with minimal output and no options. Works with both 48k &
 128k snapshots.
 
-    v1.0 initial release based on v1.9b of Z80onMDR
-    v1.1 improved loading speed on real hardware by interleaving files
-    v1.1a further improvements to loading speed by adding space between files (up to 8x improvement in loading speed compared to v1)
+    v1.0  initial release based on v1.9b of Z80onMDR
+    v1.1  improved loading speed on real hardware by interleaving files
+    v1.1a further improvements to loading speed by adding space between the files 
+          up to 8x improvement in loading speed compared to v1
 
 Example Loading times for Chase HQ 128k version (converted Z80 snapshot): v1.0  - 2min 40secs; v1.1  - 1min 30sec; v1.1a - 20secs
 
