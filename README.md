@@ -2,21 +2,19 @@
 
 Z80onMDR_Lite - Simple ZX Spectrum Z80 snapshot to Microdrive MDR image converter
 
+    v1.0  initial release based on v1.9b of Z80onMDR
+    v1.1  improved loading speed on real hardware by interleaving files
+    v1.1a further improvements to loading speed by adding space between the files 
+          up to 8x improvement in loading speed compared to v1.
+          Example loading times for Chase HQ 128k version (converted z80 snapshot)
+            v1.0  - 2mins 40secs
+            v1.1  - 1min 30secs
+            v1.1a - 20secs
+
 A cut down version of the full Z80onMDR https://tomdalby.com/other/z80onmdr.html 
 to use with or within other utilities under the GPL3.0 licence. Only converts
 a single Z80 snapshot with minimal output and no options. Works with both 48k &
 128k snapshots.
-
-    v1.0  initial release based on v1.9b of Z80onMDR
-    v1.1  improved loading speed on real hardware by interleaving files
-    v1.1a further improvements to loading speed by adding space between the files 
-          up to 8x improvement in loading speed compared to v1
-          Example loading times for Chase HQ 128k version (converted z80 snapshot)
-          v1.0  - 2mins 40secs
-          v1.1  - 1min 30secs
-          v1.1a - 20secs
-
-
 
     Copyright (C) 2021 Tom Dalby
  
