@@ -10,6 +10,7 @@ Z80onMDR_Lite - Simple ZX Spectrum Z80 snapshot to Microdrive MDR image converte
             v1.0  - 2mins 40secs
             v1.1  - 1min 30secs
             v1.1a - 20secs
+    v1.2  new 3 stage launcher to remove screen corruption (added -o option to still use old launcher)
 
 A cut down version of the full Z80onMDR https://tomdalby.com/other/z80onmdr.html 
 to use with or within other utilities under the GPL3.0 licence. Only converts
