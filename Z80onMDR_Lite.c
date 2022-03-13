@@ -34,7 +34,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#define VERSION_NUM "v1.2"
+#define VERSION_NUM "v1.21"
 #define PROGNAME "Z80onMDR_lite"
 #define B_GAP 128
 #define MAXLENGTH 256
@@ -43,6 +43,7 @@
 //v1.1 added file interleaving, required removal of direct writing to output file
 //v1.1a improved file interleaving further by adding additional space between files
 //v1.2 new 3 stage launcher to remove screen corruption, small tidy up of code, added -o option to still use old launcher
+//v1.21 add better attr selection & improved large delta speed
 typedef union {
 	unsigned long int rrrr; //byte number
 	unsigned char r[4]; //split number into 4 8bit bytes in case of overflow
@@ -527,6 +528,7 @@ int main(int argc, char* argv[]) {
 	if ((comp = (unsigned char*)malloc((42240 + 1320) * sizeof(unsigned char))) == NULL) error(8);
 	int delta = 3;
 	int vgap = 0;
+	int vgaps, vgapb;
 	int dgap = 0;
 	int startpos = 6912;
 	int mainsize = 42240;
@@ -561,7 +563,19 @@ int main(int argc, char* argv[]) {
 			}
 			if (noc_launchigp_pos == 0) {
 				noc_launchigp_pos = 6912 - (noc_launchigp_len + delta - 3); // no space so use attr space instead
-				vgap = 0x07; // repair with white on black attr
+				//find best vgap
+				vgaps = 0x00;
+				vgapb = 0;
+				for (vgap = 0x00; vgap <= 0xff; vgap++) {
+					for (i = noc_launchigp_pos, j = 0; i < 6912; i++) {
+						if (main[i] == vgap) j++;
+					}
+					if (j >= vgapb) {
+						vgapb = j;
+						vgaps = vgap;
+					}
+				}
+				vgap = vgaps;
 			}
 			start.rrrr = noc_launchigp_pos + 16384;
 			noc_launchprt[noc_launchprt_jp] = start.r[0];
@@ -1056,6 +1070,7 @@ int decompressf(unsigned char* comp, int compsize, int mainsize) {
 	hl = &comp[0];
 	deltac = mainsize - compsize;
 	deltan = 0;
+	int maxdelta = 0;
 	int j;
 	while (*hl != 0xff) {
 		if (*hl < 0x20) { // <32 simple literal copy
@@ -1082,9 +1097,10 @@ int decompressf(unsigned char* comp, int compsize, int mainsize) {
 			deltac++;
 			deltan += c;
 			hl++;
-			if (deltac < deltan) return deltan - deltac; // caught up so delta not large enough, return gap
+			if ((deltan - deltac) > maxdelta) maxdelta = (deltan - deltac);
 		}
 	}
+	if (maxdelta) return maxdelta;
 	return 0;
 }
 //
