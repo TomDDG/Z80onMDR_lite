@@ -34,7 +34,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#define VERSION_NUM "v1.21"
+#define VERSION_NUM "v1.22"
 #define PROGNAME "Z80onMDR_lite"
 #define B_GAP 128
 #define MAXLENGTH 256
@@ -546,17 +546,15 @@ int main(int argc, char* argv[]) {
 			}
 			noc_launchigp_pos = 0;
 			// find gap
-			for (vgap = 0x00; vgap < 0xff; vgap++) { // cycle through all bytes
+			for (vgap = 0x00; vgap <= 0xff; vgap++) { // cycle through all bytes
 				for (i = 0, j = 0; i < 41984; i++) {
 					if (main[i + 6912 + 256] == vgap) j++;
-					else {
-						if (j >= (noc_launchigp_len + delta - 3) &&
-							((i + 6912 + 256 - j) > stackpos - 16384 - 67 ||
-								(i + 6912 + 256 - j + (noc_launchigp_len + delta - 3)) < stackpos - 16384 - 67)) {
-							noc_launchigp_pos = i + 6912 + 256 - j; // start of storage
-							break;
-						}
-						j = 0;
+					else j = 0;
+					if (j >= (noc_launchigp_len + delta - 3) &&
+						((i + 6912 + 256 - j) > stackpos - 16384 || // start of gap > stack then ok
+							i + 6912 + 256 < stackpos - 16384 - 67)) { // end of gap < stack - 67 then ok
+						noc_launchigp_pos = i + 6912 + 256 - j; // start of storage
+						break;
 					}
 				}
 				if (noc_launchigp_pos > 0) break;
