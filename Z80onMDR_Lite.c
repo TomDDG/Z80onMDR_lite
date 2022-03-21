@@ -473,23 +473,7 @@ int main(int argc, char* argv[]) {
 	}
 	fprintf(stdout, "R(%lu)+",len.rrrr);
 	mdrfname[1] = mdrfname[2] = ' ';
-	// v1.3 moved here in case stack within the screen
-	if (oldl == 0) {
-		for (i = 0; i < noc_launchstk_len; i++) main[noc_launchstk_pos - 16384 + i] = noc_launchstk[i]; // copy stack routine under stack
-	}
-	// screen
 	unsigned char* comp;
-	if ((comp = (unsigned char*)malloc((6912 + 216 + 109) * sizeof(unsigned char))) == NULL) error(8);
-	len.rrrr = zxsc(&main[0], &comp[scrload_len], 6912, 1);
-	len.rrrr += scrload_len;
-	for (i = 0; i < scrload_len; i++) comp[i] = scrload[i]; // add m/c
-	// write screen
-	mdrfname[0] = 'S';
-	start.rrrr = 25088;
-	param.rrrr = 0xffff;
-	i = appendmdr(mdrname, mdrfname, cart, &sector, comp, len, start, param, 0x03);
-	fprintf(stdout, "S(%lu)+", len.rrrr);
-	free(comp);
 	//otek pages
 	if (otek) {
 		if ((comp = (unsigned char*)malloc((16384 + 512 + unpack_len) * sizeof(unsigned char))) == NULL) error(8);
@@ -607,6 +591,20 @@ int main(int argc, char* argv[]) {
 		if (delta > B_GAP) error(9);
 	} while (dgap > 0);
 	if (len.rrrr > 40704 - delta) error(9); // too big to fit in Spectrum memory, 0x6100 lowest point
+	// screen **v1.3 moved here in case stack within screen
+	unsigned char* comp_s;
+	rrrr len_s;
+	if ((comp_s = (unsigned char*)malloc((6912 + 216 + 109) * sizeof(unsigned char))) == NULL) error(8);
+	len_s.rrrr = zxsc(&main[0], &comp_s[scrload_len], 6912, 1);
+	len_s.rrrr += scrload_len;
+	for (i = 0; i < scrload_len; i++) comp_s[i] = scrload[i]; // add m/c
+	// write screen
+	mdrfname[0] = 'S';
+	start.rrrr = 25088;
+	param.rrrr = 0xffff;
+	i = appendmdr(mdrname, mdrfname, cart, &sector, comp_s, len_s, start, param, 0x03);
+	fprintf(stdout, "S(%lu)+", len_s.rrrr);
+	free(comp_s);
 	// write main
 	mdrfname[0] = 'M';
 	start.rrrr = 65536 - len.rrrr;
