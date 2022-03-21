@@ -12,7 +12,7 @@ Z80onMDR_Lite - Simple ZX Spectrum Z80 snapshot to Microdrive MDR image converte
             v1.1a - 20secs
     v1.2  new 3 stage launcher to remove screen corruption (added -o option to still use old launcher)
     v1.21 improved large delta speed and attr matching added for no gap 3 stage launcher
-    v1.22 improved gap finder, v1.23 bug fixed for thing I broke in v1.22
+    v1.22 improved gap finder, v1.23 bug fixe for thing I broke in v1.22
     v1.3 handle stack in screen for better compatibility
 
 A cut down version of the full Z80onMDR https://tomdalby.com/other/z80onmdr.html 
