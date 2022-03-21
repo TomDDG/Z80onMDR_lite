@@ -31,10 +31,11 @@
 // E09 - cannot compress main block (delta or maxsize)
 // E10 - cannot allocate RAM for storing of cartridge
 // E11 - cartridge full (unlikely with a single z80)
+// E12 - stack clashes with launcher
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#define VERSION_NUM "v1.23"
+#define VERSION_NUM "v1.3"
 #define PROGNAME "Z80onMDR_lite"
 #define B_GAP 128
 #define MAXLENGTH 256
@@ -46,6 +47,7 @@
 //v1.21 add better attr selection & improved large delta speed
 //v1.22 better gap selection
 //v1.23 bug fix on gap selection
+//v1.3 handle stack in screen
 typedef union {
 	unsigned long int rrrr; //byte number
 	unsigned char r[4]; //split number into 4 8bit bytes in case of overflow
@@ -471,6 +473,10 @@ int main(int argc, char* argv[]) {
 	}
 	fprintf(stdout, "R(%lu)+",len.rrrr);
 	mdrfname[1] = mdrfname[2] = ' ';
+	// v1.3 moved here in case stack within the screen
+	if (oldl == 0) {
+		for (i = 0; i < noc_launchstk_len; i++) main[noc_launchstk_pos - 16384 + i] = noc_launchstk[i]; // copy stack routine under stack
+	}
 	// screen
 	unsigned char* comp;
 	if ((comp = (unsigned char*)malloc((6912 + 216 + 109) * sizeof(unsigned char))) == NULL) error(8);
@@ -563,6 +569,8 @@ int main(int argc, char* argv[]) {
 			}
 			if (noc_launchigp_pos == 0) {
 				noc_launchigp_pos = 6912 - (noc_launchigp_len + delta - 3); // no space so use attr space instead
+				// error check if this clashes with the stack just quit as no way to get it to work
+				if (noc_launchigp_pos > stackpos - 16384 - 67 && noc_launchigp_pos < stackpos - 16384) error(12);
 				//find best vgap
 				vgaps = 0x00;
 				vgapb = 0;
