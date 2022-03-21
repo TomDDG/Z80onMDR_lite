@@ -34,7 +34,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#define VERSION_NUM "v1.22"
+#define VERSION_NUM "v1.23"
 #define PROGNAME "Z80onMDR_lite"
 #define B_GAP 128
 #define MAXLENGTH 256
@@ -44,6 +44,8 @@
 //v1.1a improved file interleaving further by adding additional space between files
 //v1.2 new 3 stage launcher to remove screen corruption, small tidy up of code, added -o option to still use old launcher
 //v1.21 add better attr selection & improved large delta speed
+//v1.22 better gap selection
+//v1.23 bug fix on gap selection
 typedef union {
 	unsigned long int rrrr; //byte number
 	unsigned char r[4]; //split number into 4 8bit bytes in case of overflow
@@ -335,7 +337,7 @@ int main(int argc, char* argv[]) {
 		if (addlen.rrrr > 23) fseek(fp_in, 31, SEEK_CUR);
 		// only if version 3 & 55 additional length
 		//	86      1       Last OUT to port 0x1ffd, ignored for Microdrive as only applicable on +3/+2A machines [SKIPPED]
-		if (addlen.rrrr == 55) if ((fgetc(fp_in) & 1) == 1) error(5); //special page mode so exit as not compatible with earlier 128k machines
+		if (addlen.rrrr == 55) 	if ((fgetc(fp_in) & 1) == 1) error(5); //special page mode so exit as not compatible with earlier 128k machines
 	}
 	//space for decompression of z80
 	//8 * 16384 = 131072bytes
@@ -550,10 +552,10 @@ int main(int argc, char* argv[]) {
 				for (i = 0, j = 0; i < 41984; i++) {
 					if (main[i + 6912 + 256] == vgap) j++;
 					else j = 0;
-					if (j >= (noc_launchigp_len + delta - 3) &&
+					if (j > (noc_launchigp_len + delta - 3) &&
 						((i + 6912 + 256 - j) > stackpos - 16384 || // start of gap > stack then ok
 							i + 6912 + 256 < stackpos - 16384 - 67)) { // end of gap < stack - 67 then ok
-						noc_launchigp_pos = i + 6912 + 256 - j; // start of storage
+						noc_launchigp_pos = i + 6912 + 256 - (noc_launchigp_len + delta - 3); // start of storage
 						break;
 					}
 				}
