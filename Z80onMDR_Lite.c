@@ -35,7 +35,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#define VERSION_NUM "v1.3"
+#define VERSION_NUM "v1.31"
 #define PROGNAME "Z80onMDR_lite"
 #define B_GAP 128
 #define MAXLENGTH 256
@@ -48,6 +48,7 @@
 //v1.22 better gap selection
 //v1.23 bug fix on gap selection
 //v1.3 handle stack in screen
+//v1.31 better stack handling
 typedef union {
 	unsigned long int rrrr; //byte number
 	unsigned char r[4]; //split number into 4 8bit bytes in case of overflow
@@ -242,6 +243,7 @@ int main(int argc, char* argv[]) {
 	launchmdr_full[launchmdr_full_sp] = fgetc(fp_in);
 	launchmdr_full[launchmdr_full_sp + 1] = fgetc(fp_in);
 	int stackpos = launchmdr_full[launchmdr_full_sp + 1] * 256 + launchmdr_full[launchmdr_full_sp];
+	if (stackpos == 0) stackpos = 65536;
 	noc_launchstk_pos = stackpos - noc_launchstk_len; // pos of stack code
 	len.rrrr = noc_launchstk_pos;
 	noc_launchigp[noc_launchigp_jp] = len.r[0];
@@ -407,6 +409,23 @@ int main(int argc, char* argv[]) {
 		} while (c != bankend);
 	}
 	fclose(fp_in);
+	//
+	if (stackpos < 23296) { // stack in screen?
+		i = launchmdr_full[launchmdr_full_jp + 1] * 256 + launchmdr_full[launchmdr_full_jp] - 16384;
+		if (main[i] == 0x31) { // ld sp,
+			// set-up stack
+			stackpos = main[i + 2] * 256 + main[i + 1];
+			if (stackpos == 0) stackpos = 65536;
+			noc_launchstk_pos = stackpos - noc_launchstk_len; // pos of stack code
+			len.rrrr = noc_launchstk_pos;
+			noc_launchigp[noc_launchigp_jp] = len.r[0];
+			noc_launchigp[noc_launchigp_jp + 1] = len.r[1]; // jump to stack code
+			len.rrrr += 47;
+			noc_launchstk[noc_launchstk_rd] = len.r[0];
+			noc_launchstk[noc_launchstk_rd + 1] = len.r[1]; // start of stack within stack
+			fprintf(stdout, "{S:%d}", stackpos);
+		}
+	}
 	//microdrive settings
 	unsigned char sector = 0xfe; // max size 254 sectors
 	int mdrsize = 137923; // sector * 543 + 1;
