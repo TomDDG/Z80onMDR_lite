@@ -32,10 +32,11 @@
 // E10 - cannot allocate RAM for storing of cartridge
 // E11 - cartridge full (unlikely with a single z80)
 // E12 - stack clashes with launcher
+// E13 - program counter clashes with launcher
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#define VERSION_NUM "v1.31"
+#define VERSION_NUM "v1.4"
 #define PROGNAME "Z80onMDR_lite"
 #define B_GAP 128
 #define MAXLENGTH 256
@@ -49,6 +50,7 @@
 //v1.23 bug fix on gap selection
 //v1.3 handle stack in screen
 //v1.31 better stack handling
+//v1.4 more improvements to 3 stage loader, adjustable stack/gap loader to minimise memory differences. fixed some v2 48k z80 snapshot issue
 typedef union {
 	unsigned long int rrrr; //byte number
 	unsigned char r[4]; //split number into 4 8bit bytes in case of overflow
@@ -81,7 +83,7 @@ int main(int argc, char* argv[]) {
 		oldl = 1; // use older screen based launcher
 		fprintf(stdout, "[O]");
 	}
-	if (strcmp(&argv[1][strlen(argv[1]) - 4], ".z80") == 0 && strcmp(&argv[1][strlen(argv[1]) - 4], ".Z80") == 0) error(1); // argument isn't .z80 or .Z80
+	if (strcmp(&argv[1][strlen(argv[1]) - 4], ".z80") != 0 && strcmp(&argv[1][strlen(argv[1]) - 4], ".Z80") != 0) error(1); // argument isn't .z80 or .Z80
 	//create ouput mdr name from input z80
 	char* fz80 = argv[1];
 	char fmdr[256]; // limit to 256chars
@@ -91,7 +93,7 @@ int main(int argc, char* argv[]) {
 	//open read/write
 	FILE* fp_in, * fp_out;
 	if ((fp_in = fopen(fz80, "rb")) == NULL) error(2); // cannot open z80 for read
-	// 48k loader
+	// 48k basic loader
 #define mdrbl48k_brd 16
 #define mdrbl48k_pap 22
 #define mdrbl48k_usr 94
@@ -103,7 +105,7 @@ int main(int argc, char* argv[]) {
 								0x00, 0x00, 0x00, 0x62, 0x00, 0x3a, 0xef, 0x2a, 0x22, 0x6d, 0x22, 0x3b, 0x64, 0x3b, 0x22, 0x4d,	//(56)
 								0x22, 0xaf, 0x3a, 0xef, 0x2a, 0x22, 0x6d, 0x22, 0x3b, 0x64, 0x3b, 0x22, 0x4c, 0x22, 0xaf, 0x3a, //(72)
 								0xf9, 0xc0, 0x30, 0x0e, 0x00, 0x00, 0x00, 0x40, 0x00, 0x0d };									//(88)
-	//128k loader
+	//128k basic loader
 #define mdrbl128k_brd 16
 #define mdrbl128k_pap 22
 #define mdrbl128k_usr 142
@@ -121,7 +123,7 @@ int main(int argc, char* argv[]) {
 									0x2a, 0x3d, 0x5c, 0x23, 0x36, 0x13, 0x2b, 0x36, 0x03, 0x2b, 0x36, 0x1b, 0x2b, 0x36, 0x76, 0x2b,	//(152) usr 0 code
 									0x36, 0x00, 0x2b, 0x36, 0x51, 0xf9, 0xfd, 0xcb, 0x01, 0xa6, 0x3e, 0x10, 0x01, 0xfd, 0x7f, 0xed,	//(168)
 									0x79, 0xfb, 0xc9, 0x0d };																		//(184)
-	//launcher
+	// old screen based launcher
 #define launchmdr_full_rd 2 // rdata default 0x4072 for 16384, so +114
 #define launchmdr_full_cp 5 // compression pos
 #define launchmdr_full_cs 8
@@ -165,50 +167,72 @@ int main(int argc, char* argv[]) {
 									0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
 									0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
 									0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 };
-	// 3 stage launcher, 1-printer buffer part
-#define noc_launchprt_cp 5 // compression pos //*
-#define noc_launchprt_jp 20 // where to jump to //*
+	// 3 stage launcher, 1-printer buffer
+#define noc_launchprt_cp 5 // compression pos
+#define noc_launchprt_jp 20 // where to jump to
 #define noc_launchprt_len 67
 	unsigned char noc_launchprt[] = { 0xf3,0x31,0x43,0x5b,0x21,0x00,0x00,0x11,0x00,0x5c,0x43,0x18,0x02,0xed,0xb0,0x7e,	//(0)
 									  0x23,0x4f,0x0c,0xca,0xfe,0x5b,0xfe,0x20,0x38,0xf3,0xf5,0xe6,0xe0,0x07,0x07,0x07,	//(16)
 									  0xfe,0x07,0x20,0x02,0x86,0x23,0xc6,0x02,0x4f,0x88,0x91,0x47,0xf1,0xe5,0xc5,0xe6,	//(32)
 									  0x1f,0x47,0x4e,0x62,0x6b,0x37,0xed,0x42,0xc1,0xed,0xb0,0xe1,0x23,0x18,0xd0,		//(48)
 									  0x00,0x00,0x00,0x00};	//(63)
-	// 3 stage launcher, 2-gap part
+	// 3 stage launcher, 2-gap
 	int noc_launchigp_pos = 0; // memory position for this routine
-#define noc_launchigp_bdata 1 // bdata start, pos+16 //*
-#define noc_launchigp_lcs 4 // last copy size=delta=3 //*
-#define noc_launchigp_jp 14 // jump into stack-67 //*
-#define noc_launchigp_begin 16 // start of bdata 
-#define noc_launchigp_len 86 // this is also the restore number 
-	unsigned char noc_launchigp[] = { 0x21,0x3f,0x5b,0x0e,0x03,0xed,0xb0,0x16,0x5b,0x0e,0x43,0xed,0xb0,0xc3,0x0e,0x5c };	//(0)
-	// 3 stage launcher, 3-stack part
-	int noc_launchstk_pos = 0; // memory position stack - 67 //*
-#define noc_launchstk_clr 1 // amount to clear 87 //*
-#define noc_launchstk_chr 4 // char to clear //*
-#define noc_launchstk_out 11 // last out to 0x7ffd 0x30 is bank off //*
-#define noc_launchstk_rd 15 // stack rdata = stack - 20 or start+47 //*
-#define noc_launchstk_r 36 // r - reduce by 5 instead of 6 //*
-#define noc_launchstk_im 40 // interrupt //*
-#define noc_launchstk_a 42 //*
-#define noc_launchstk_ei 43 //*
-#define noc_launchstk_jp 45 //*
-#define noc_launchstk_bca 47 //*
-#define noc_launchstk_dea 49 //*
-#define noc_launchstk_hla 51 //*
-#define noc_launchstk_ix 53 //*
-#define noc_launchstk_iy 55 //*
-#define noc_launchstk_afa 57 //*
-#define noc_launchstk_hl 59 //*
-#define noc_launchstk_de 61 //*
-#define noc_launchstk_bc 63 //*
-#define noc_launchstk_if 65 //*
-#define noc_launchstk_len 67
-	unsigned char noc_launchstk[] = { 0x06,0x53,0x2b,0x36,0x00,0x10,0xfb,0x01,0xfd,0x7f,0x3e,0x30,0xed,0x79,0x31,0x3d,	// (0)
-									   0x5c,0xd9,0xc1,0xd1,0xe1,0xd9,0xdd,0xe1,0xfd,0xe1,0x08,0xf1,0x08,0xe1,0xd1,0xc1,	// (16)
-									   0xf1,0xed,0x47,0x3e,0x02,0xed,0x4f,0xed,0x5e,0x3e,0x00,0xf3,0xc3,0xb7,0xd9,0x00,	// (32)
-									   0xff,0x00,0xff,0x1a,0xf8,0xf1,0xe3,0x3a,0x5c,0x8a,0x00,0x4c,0x10,0xcc,0x43,0x00,	// (48)
-									   0x00,0x00,0x02 };																// (64)
+#define noc_launchigp_bdata 1 // bdata start, pos+16
+#define noc_launchigp_lcs 4 // last copy size=delta=3
+#define noc_launchigp_out 17 // last out to 0x7ffd 0x30 is bank off
+#define noc_launchigp_bca 22
+#define noc_launchigp_dea 25
+#define noc_launchigp_hla 28
+#define noc_launchigp_ix 33
+#define noc_launchigp_iy 37
+#define noc_launchigp_de 40
+#define noc_launchigp_clr 44 // amount to clear 121
+#define noc_launchigp_chr 43 // char to clear
+#define noc_launchigp_rd 46 // stack rdata  (stack-8)
+#define noc_launchigp_jp 49 // jump into stack-32
+#define noc_launchigp_begin 51 // start of bdata 
+#define noc_launchigp_len 121 // this is also the restore number 51+67+3 (delta)
+	unsigned char noc_launchigp[] = { 0x21,0x3f,0x5b,																	//(0) bdata [1]
+										0x0e,0x03,																		//(3) lcs [4]
+										0xed,0xb0,0x16,0x5b,0x0e,0x43,0xed,0xb0,										//(5) 
+										0x01,0xfd,0x7f,0x3e,0x30,														//(13) ld a,0x30 [17]
+										0xed,0x79,0xd9,0x01,0x00,0x00,													//(18) bc' [22]
+										0x11,0x00,0x00,																	//(24) de' [25]
+										0x21,0x00,0x00,																	//(27) hl' [28]
+										0xd9,0xdd,0x21,0x00,0x00,														//(30) ix [33]
+										0xfd,0x21,0x00,0x00,															//(35) iy [37]
+										0x11,0x00,0x00,																	//(39) de [40]
+										0x01,0x00,0x00,																	//(42) clr [44],chr [43]
+										0x31,0x8e,0x5b,																	//(45) rd [46]
+										0xc3,0x76,0x5b };																//(48) jp [49]
+	// 3 stage launcher - gap adjustments
+	int adjgap[] = { 3,  6, 9, 13, 17, 18, 21, 24, 27, 28, 30, 32, 35 };
+	//              rd cc de  iy  ix  exx hl' de' bc' exx out  a  7ffd
+	//
+	// 3 stage launcher, 3-stack
+	int noc_launchstk_pos = 0; // memory position stack - 32
+#define noc_launchstk_bc 8
+#define noc_launchstk_hl 11
+#define noc_launchstk_r 17 // r - reduce by 4 instead of 6
+#define noc_launchstk_im 21 // interrupt
+#define noc_launchstk_a 23
+#define noc_launchstk_ei 24
+#define noc_launchstk_jp 26
+#define noc_launchstk_afa 28
+#define noc_launchstk_if 30
+#define noc_launchstk_len 32 // max 67, min 32
+	unsigned char noc_launchstk[] = { 0x2b,0x71,0x10,0xfc,0x08,0xf1,0x08,												//(0)
+										0x01,0x00,0x00,																	//(7) bc [8]
+										0x21,0x00,0x00,																	//(10) hl [11]
+										0xf1,0xed,0x47,																	//(13)
+										0x3e,0x02,0xed,0x4f,															//(16) r [17]
+										0xed,0x5e,																		//(20) im [21]
+										0x3e,0x00,																		//(22) a [23]
+										0xf3,																			//(24) ei
+										0xc3,0xb7,0xd9,																	//(25) pc [26]
+										0x00,0x00,																		//(28) af'
+										0x00,0x00 };																	//(30) if 
 	//compressed screen loader
 #define scrload_len 109
 	unsigned char scrload[] = { 0x21, 0x6d, 0x62, 0x11, 0x00, 0x58, 0x18, 0x11, 0x7e, 0x12, 0x14, 0x7a, 0xfe, 0x59, 0xd4, 0x5b,	//0
@@ -245,17 +269,14 @@ int main(int argc, char* argv[]) {
 	int stackpos = launchmdr_full[launchmdr_full_sp + 1] * 256 + launchmdr_full[launchmdr_full_sp];
 	if (stackpos == 0) stackpos = 65536;
 	noc_launchstk_pos = stackpos - noc_launchstk_len; // pos of stack code
-	len.rrrr = noc_launchstk_pos;
-	noc_launchigp[noc_launchigp_jp] = len.r[0];
-	noc_launchigp[noc_launchigp_jp + 1] = len.r[1]; // jump to stack code
-	len.rrrr += 47;
-	noc_launchstk[noc_launchstk_rd] = len.r[0];
-	noc_launchstk[noc_launchstk_rd + 1] = len.r[1]; // start of stack within stack
+	len.rrrr = noc_launchstk_pos + noc_launchstk_afa;
+	noc_launchigp[noc_launchigp_rd] = len.r[0];
+	noc_launchigp[noc_launchigp_rd + 1] = len.r[1]; // start of stack within stack
 	//	10      1       Interrupt register
 	launchmdr_full[launchmdr_full_if + 1] = noc_launchstk[noc_launchstk_if + 1] = fgetc(fp_in);
 	//	11      1       Refresh register (Bit 7 is not significant!)
 	launchmdr_full[launchmdr_full_r] = fgetc(fp_in) - 6; // r, reduce by 6 so correct on launch
-	noc_launchstk[noc_launchstk_r] = launchmdr_full[launchmdr_full_r] - 1; // 5 for 3 stage launcher
+	noc_launchstk[noc_launchstk_r] = launchmdr_full[launchmdr_full_r] + 1; // 5 for 3 stage launcher
 	//	12      1       Bit 0: Bit 7 of r register; Bit 1-3: Border colour; Bit 4=1: SamROM; Bit 5=1:v1 Compressed; Bit 6-7: N/A
 	c = fgetc(fp_in);
 	unsigned char compressed = (c & 32) >> 5;	// 1 compressed, 0 not
@@ -269,27 +290,27 @@ int main(int argc, char* argv[]) {
 	}
 	mdrbl48k[mdrbl48k_brd] = mdrbl128k[mdrbl128k_brd] = mdrbl48k[mdrbl48k_pap] = mdrbl128k[mdrbl128k_pap] = ((c & 14) >> 1) + 0x30; //border/paper col
 	//	13      2       DE register pair
-	launchmdr_full[launchmdr_full_de] = noc_launchstk[noc_launchstk_de] = fgetc(fp_in);
-	launchmdr_full[launchmdr_full_de + 1] = noc_launchstk[noc_launchstk_de + 1] = fgetc(fp_in);
+	launchmdr_full[launchmdr_full_de] = noc_launchigp[noc_launchigp_de] = fgetc(fp_in);
+	launchmdr_full[launchmdr_full_de + 1] = noc_launchigp[noc_launchigp_de + 1] = fgetc(fp_in);
 	//	15      2       BC' register pair
-	launchmdr_full[launchmdr_full_bca] = noc_launchstk[noc_launchstk_bca] = fgetc(fp_in);
-	launchmdr_full[launchmdr_full_bca + 1] = noc_launchstk[noc_launchstk_bca + 1] = fgetc(fp_in);
+	launchmdr_full[launchmdr_full_bca] = noc_launchigp[noc_launchigp_bca] = fgetc(fp_in);
+	launchmdr_full[launchmdr_full_bca + 1] = noc_launchigp[noc_launchigp_bca + 1] = fgetc(fp_in);
 	//	17      2       DE' register pair
-	launchmdr_full[launchmdr_full_dea] = noc_launchstk[noc_launchstk_dea] = fgetc(fp_in);
-	launchmdr_full[launchmdr_full_dea + 1] = noc_launchstk[noc_launchstk_dea + 1] = fgetc(fp_in);
+	launchmdr_full[launchmdr_full_dea] = noc_launchigp[noc_launchigp_dea] = fgetc(fp_in);
+	launchmdr_full[launchmdr_full_dea + 1] = noc_launchigp[noc_launchigp_dea + 1] = fgetc(fp_in);
 	//	19      2       HL' register pair
-	launchmdr_full[launchmdr_full_hla] = noc_launchstk[noc_launchstk_hla] = fgetc(fp_in);
-	launchmdr_full[launchmdr_full_hla + 1] = noc_launchstk[noc_launchstk_hla + 1] = fgetc(fp_in);
+	launchmdr_full[launchmdr_full_hla] = noc_launchigp[noc_launchigp_hla] = fgetc(fp_in);
+	launchmdr_full[launchmdr_full_hla + 1] = noc_launchigp[noc_launchigp_hla + 1] = fgetc(fp_in);
 	//	21      1       A' register
 	launchmdr_full[launchmdr_full_afa + 1] = noc_launchstk[noc_launchstk_afa + 1] = fgetc(fp_in);
 	//	22      1       F' register
 	launchmdr_full[launchmdr_full_afa] = noc_launchstk[noc_launchstk_afa] = fgetc(fp_in);
 	//	23      2       IY register (Again LSB first)
-	launchmdr_full[launchmdr_full_iy] = noc_launchstk[noc_launchstk_iy] = fgetc(fp_in);
-	launchmdr_full[launchmdr_full_iy + 1] = noc_launchstk[noc_launchstk_iy + 1] = fgetc(fp_in);
+	launchmdr_full[launchmdr_full_iy] = noc_launchigp[noc_launchigp_iy] = fgetc(fp_in);
+	launchmdr_full[launchmdr_full_iy + 1] = noc_launchigp[noc_launchigp_iy + 1] = fgetc(fp_in);
 	//	25      2       IX register
-	launchmdr_full[launchmdr_full_ix] = noc_launchstk[noc_launchstk_ix] = fgetc(fp_in);
-	launchmdr_full[launchmdr_full_ix + 1] = noc_launchstk[noc_launchstk_ix + 1] = fgetc(fp_in);
+	launchmdr_full[launchmdr_full_ix] = noc_launchigp[noc_launchigp_ix] = fgetc(fp_in);
+	launchmdr_full[launchmdr_full_ix + 1] = noc_launchigp[noc_launchigp_ix + 1] = fgetc(fp_in);
 	//	27      1       Interrupt flipflop, 0 = DI, otherwise EI
 	c = fgetc(fp_in);
 	if (c == 0) launchmdr_full[launchmdr_full_ei] = noc_launchstk[noc_launchstk_ei] = 0xf3;	//di
@@ -319,7 +340,7 @@ int main(int argc, char* argv[]) {
 		else if (c > 3) otek = 1;
 		//	35      1       If in 128 mode, contains last OUT to 0x7ffd
 		c = fgetc(fp_in);
-		if (otek) launchmdr_full[launchmdr_full_out] = noc_launchstk[noc_launchstk_out] = c;
+		if (otek) launchmdr_full[launchmdr_full_out] = noc_launchigp[noc_launchigp_out] = c;
 		//	36      1       Contains 0xff if Interface I rom paged [SKIPPED]
 		//	37      1       Hardware Modify Byte [SKIPPED]
 		//	38      1       Last OUT to port 0xfffd (soundchip register number) [SKIPPED]
@@ -388,13 +409,13 @@ int main(int argc, char* argv[]) {
 			bank[8] = 0; //page 5
 			bank[9] = 98304; //page 6
 			bank[10] = 114688; //page 7
-			bankend = 10;
+			bankend = 8;
 		}
 		else {
 			bank[4] = 16384; //page 2
 			bank[5] = 32768; //page 0
 			bank[8] = 0; //page 5
-			bankend = 8;
+			bankend = 3;
 		}
 		do {
 			len.r[0] = fgetc(fp_in);
@@ -406,7 +427,8 @@ int main(int argc, char* argv[]) {
 				}
 				else if (dcz80(&fp_in, &main[bank[c]], 16384) != 16384) error(7);
 			}
-		} while (c != bankend);
+			bankend--;
+		} while (bankend);
 	}
 	fclose(fp_in);
 	//
@@ -417,12 +439,9 @@ int main(int argc, char* argv[]) {
 			stackpos = main[i + 2] * 256 + main[i + 1];
 			if (stackpos == 0) stackpos = 65536;
 			noc_launchstk_pos = stackpos - noc_launchstk_len; // pos of stack code
-			len.rrrr = noc_launchstk_pos;
-			noc_launchigp[noc_launchigp_jp] = len.r[0];
-			noc_launchigp[noc_launchigp_jp + 1] = len.r[1]; // jump to stack code
-			len.rrrr += 47;
-			noc_launchstk[noc_launchstk_rd] = len.r[0];
-			noc_launchstk[noc_launchstk_rd + 1] = len.r[1]; // start of stack within stack
+			len.rrrr = noc_launchstk_pos + noc_launchstk_afa;
+			noc_launchigp[noc_launchigp_rd] = len.r[0];
+			noc_launchigp[noc_launchigp_rd + 1] = len.r[1]; // start of stack within stack
 			fprintf(stdout, "{S:%d}", stackpos);
 		}
 	}
@@ -469,7 +488,7 @@ int main(int argc, char* argv[]) {
 	// add files to blank cartridge in interleaved format which leaves a sector between each sector written, which allows 
 	// the drive to pick up the next sector quicker and as a result loads the game faster. After filling the drive it
 	// loops back to the first unused sector
-	// write run
+	// write run (a)
 	rrrr start;
 	rrrr param;
 	unsigned char mdrfname[] = "run       ";
@@ -493,53 +512,14 @@ int main(int argc, char* argv[]) {
 	fprintf(stdout, "R(%lu)+",len.rrrr);
 	mdrfname[1] = mdrfname[2] = ' ';
 	unsigned char* comp;
-	//otek pages
-	if (otek) {
-		if ((comp = (unsigned char*)malloc((16384 + 512 + unpack_len) * sizeof(unsigned char))) == NULL) error(8);
-		len.rrrr = zxsc(&main[bank[4]], &comp[unpack_len], 16384, 0);
-		for (i = 0; i < unpack_len; i++) comp[i] = unpack[i]; // add in unpacker
-		len.rrrr += unpack_len;
-		fprintf(stdout, "1(%lu)+", len.rrrr);
-		mdrfname[0] = '1';
-		start.rrrr = 32256 - unpack_len;
-		param.rrrr = 0xffff;
-		i = appendmdr(mdrname, mdrfname, cart, &sector, comp, len, start, param, 0x03);
-		// page 3
-		mdrfname[0]++;
-		comp[0] = 0x13;
-		len.rrrr = zxsc(&main[bank[6]], &comp[1], 16384, 0);
-		len.rrrr++;
-		fprintf(stdout, "3(%lu)+", len.rrrr);
-		start.rrrr = 32255; // don't need to replace the unpacker, just the page number
-		i = appendmdr(mdrname, mdrfname, cart, &sector, comp, len, start, param, 0x03);
-		// page 4
-		mdrfname[0]++;
-		comp[0] = 0x14;
-		len.rrrr = zxsc(&main[bank[7]], &comp[1], 16384, 0);
-		len.rrrr++;
-		fprintf(stdout, "4(%lu)+", len.rrrr);
-		i = appendmdr(mdrname, mdrfname, cart, &sector, comp, len, start, param, 0x03);
-		// page 6
-		mdrfname[0]++;
-		comp[0] = 0x16;
-		len.rrrr = zxsc(&main[bank[9]], &comp[1], 16384, 0);
-		len.rrrr++;
-		fprintf(stdout, "6(%lu)+", len.rrrr);
-		i = appendmdr(mdrname, mdrfname, cart, &sector, comp, len, start, param, 0x03);
-		// page 7
-		mdrfname[0]++;
-		comp[0] = 0x17;
-		len.rrrr = zxsc(&main[bank[10]], &comp[1], 16384, 0);
-		len.rrrr++;
-		fprintf(stdout, "7(%lu)+", len.rrrr);
-		i = appendmdr(mdrname, mdrfname, cart, &sector, comp, len, start, param, 0x03);
-		free(comp);
-	}
 	// main
+	unsigned char* main48k;
+	if ((main48k = (unsigned char*)malloc(49152 * sizeof(unsigned char))) == NULL) error(6); // cannot create space for copy of main memory
 	if ((comp = (unsigned char*)malloc((42240 + 1320) * sizeof(unsigned char))) == NULL) error(8);
 	int delta = 3;
 	int vgap = 0;
 	int vgaps, vgapb;
+	int maxgap, maxpos, maxchr, adjust, stshift;
 	int dgap = 0;
 	int startpos = 6912;
 	int mainsize = 42240;
@@ -548,63 +528,109 @@ int main(int argc, char* argv[]) {
 		mainsize -= 256;
 	}
 	do {
+		for (i = 0; i < 49152; i++) {
+			main48k[i] = main[i]; // create copy of 1st 48k for manipulation
+			//printf("(%5d)%02x ",i, main[i]);
+		}
 		// new byte series scan
 		if (oldl == 0) {
-			if (noc_launchigp_pos > 0) { // if delta+1 loop then clear area first
-				for (i = 0; i < (noc_launchigp_len + delta - 3 - dgap); i++) { // -1 as delta just increased by dgap
-					main[noc_launchigp_pos + i] = vgap;
-				}
-			}
 			noc_launchigp_pos = 0;
 			// find gap
+			maxgap = maxpos = maxchr = 0;
 			for (vgap = 0x00; vgap <= 0xff; vgap++) { // cycle through all bytes
-				for (i = 0, j = 0; i < 41984; i++) {
-					if (main[i + 6912 + 256] == vgap) j++;
-					else j = 0;
-					if (j > (noc_launchigp_len + delta - 3) &&
-						((i + 6912 + 256 - j) > stackpos - 16384 || // start of gap > stack then ok
-							i + 6912 + 256 < stackpos - 16384 - 67)) { // end of gap < stack - 67 then ok
-						noc_launchigp_pos = i + 6912 + 256 - (noc_launchigp_len + delta - 3); // start of storage
-						break;
+				for (i = 0, j = 0; i < 42173; i++) { // also include rest of printer buffer
+					if (main48k[i + 6912 + noc_launchprt_len] == vgap) {
+						j++;
+						if (j > maxgap && ((i + 6912 + noc_launchprt_len - j) > stackpos - 16384 || // start of gap > stack then ok
+							i + 6912 + noc_launchprt_len < stackpos - 16384 - noc_launchstk_len)) { // end of gap < stack - 32 then ok
+							maxgap = j;
+							maxpos = i + 1;
+							maxchr = vgap;
+						}
+					}
+					else {
+						j = 0;
 					}
 				}
-				if (noc_launchigp_pos > 0) break;
 			}
-			if (noc_launchigp_pos == 0) {
-				noc_launchigp_pos = 6912 - (noc_launchigp_len + delta - 3); // no space so use attr space instead
-				// error check if this clashes with the stack just quit as no way to get it to work
-				if (noc_launchigp_pos > stackpos - 16384 - 67 && noc_launchigp_pos < stackpos - 16384) error(12);
-				//find best vgap
-				vgaps = 0x00;
-				vgapb = 0;
-				for (vgap = 0x00; vgap <= 0xff; vgap++) {
-					for (i = noc_launchigp_pos, j = 0; i < 6912; i++) {
-						if (main[i] == vgap) j++;
+			adjust = 0; // start with no adjustments between ingap and stack
+			if (maxgap > (noc_launchigp_len + delta - 3)) {
+				noc_launchigp_pos = maxpos + 6912 + noc_launchprt_len - maxgap; // start of in gap 
+			}
+			else {	// cannot find large enough gap so can we adjust the launcher?
+				i = 0;
+				do {
+					if (maxgap > (noc_launchigp_len + delta - 3) - adjgap[i]) adjust = adjgap[i];
+				} while (++i < 13 && adjust == 0);
+				if (!adjust) {	// if cannot adjust and not gap big enough then use screen attr
+					noc_launchigp_pos = 6912 - (noc_launchigp_len + delta - 3);
+					vgaps = 0x00;
+					vgapb = 0;
+					for (maxchr = 0x00; maxchr <= 0xff; maxchr++) {	//find most common attr
+						for (i = noc_launchigp_pos, j = 0; i < 6912; i++) {
+							if (main48k[i] == maxchr) j++;
+						}
+						if (j >= vgapb) {
+							vgapb = j;
+							vgaps = maxchr;
+						}
 					}
-					if (j >= vgapb) {
-						vgapb = j;
-						vgaps = vgap;
-					}
+					maxchr = vgaps;
 				}
-				vgap = vgaps;
+				else {	// can adjust to get gap to fit pos
+					noc_launchigp_pos = maxpos + 6912 + noc_launchprt_len - maxgap; // adjust
+				}
+			}
+			// is pc in the way?
+			if (noc_launchstk_pos - adjust <= (noc_launchstk[noc_launchstk_jp + 1] * 256 + noc_launchstk[noc_launchstk_jp]) &&
+					noc_launchstk_pos + noc_launchstk_len > (noc_launchstk[noc_launchstk_jp + 1] * 256 + noc_launchstk[noc_launchstk_jp])) {
+				stshift = stackpos - (noc_launchstk[noc_launchstk_jp + 1] * 256 + noc_launchstk[noc_launchstk_jp]); // stack - pc
+				if (stshift <= 4) error(13);
+				stshift = 28; // shift equivalent of 32bytes below where is was (4bytes still remain under the stack)
+			}
+			else {
+				stshift = 0;
 			}
 			start.rrrr = noc_launchigp_pos + 16384;
 			noc_launchprt[noc_launchprt_jp] = start.r[0];
 			noc_launchprt[noc_launchprt_jp + 1] = start.r[1]; // jump into gap
-			start.rrrr = noc_launchigp_pos + noc_launchigp_begin + 16384;
+			start.rrrr = noc_launchigp_pos + noc_launchigp_begin + 16384 - adjust;
 			noc_launchigp[noc_launchigp_bdata] = start.r[0];
 			noc_launchigp[noc_launchigp_bdata + 1] = start.r[1]; // bdata start
 			noc_launchigp[noc_launchigp_lcs] = delta;
-			noc_launchstk[noc_launchstk_clr] = noc_launchigp_len + delta - 3;
-			noc_launchstk[noc_launchstk_chr] = vgap; // set the erase char in stack code
-			for (i = 0; i < noc_launchstk_len; i++) main[noc_launchstk_pos - 16384 + i] = noc_launchstk[i]; // copy stack routine under stack
+			noc_launchigp[noc_launchigp_clr] = noc_launchigp_len + delta - 3 - adjust; // size of ingap clear
+			noc_launchigp[noc_launchigp_chr] = maxchr; // set the erase char in stack code
+			start.rrrr = noc_launchstk_pos - adjust - stshift;
+			noc_launchigp[noc_launchigp_jp] = start.r[0];
+			noc_launchigp[noc_launchigp_jp + 1] = start.r[1]; // jump to stack code - adjust - shift
+			// copy stack routine under stack, split version if shift
+			if (stshift) {
+				for (i = 0; i < noc_launchstk_len - 4; i++) main48k[noc_launchstk_pos - 16384 + i - stshift] = noc_launchstk[i];
+				//final 4byte just below new code
+				for (i = 0; i < 4; i++) main48k[stackpos - 16384 + i - 4] = noc_launchstk[noc_launchstk_len - 4 + i];
+			}
+			else {
+				for (i = 0; i < noc_launchstk_len; i++) main48k[noc_launchstk_pos - 16384 + i] = noc_launchstk[i]; // standard copy
+			}
+			//reduce ingap code and add to stack routine
+			if (adjust) {
+				for (i = 0; i < adjust; i++) main48k[noc_launchstk_pos - 16384 + i - adjust - stshift] =
+					noc_launchigp[noc_launchigp_begin - adjust - 3 + i];
+			}
+			// if ingap not in screen attr, this is done after so as to not effect the screen compression
 			if (noc_launchigp_pos > 6912) {
-				for (i = 0; i < noc_launchprt_len; i++) main[noc_launchigp_pos + noc_launchigp_begin + delta + i] = main[6912 + i]; // copy prtbuf to screen
-				for (i = 0; i < delta; i++) main[noc_launchigp_pos + noc_launchigp_begin + i] = main[49152 - delta + i]; // copy delta to screen
-				for (i = 0; i < noc_launchigp_begin; i++) main[noc_launchigp_pos + i] = noc_launchigp[i]; // copy in compression routine into screen
+				// copy prtbuf to code
+				for (i = 0; i < noc_launchprt_len; i++) main48k[noc_launchigp_pos + noc_launchigp_begin + delta + i - adjust] = main48k[6912 + i];
+				// copy delta to code
+				for (i = 0; i < delta; i++) main48k[noc_launchigp_pos + noc_launchigp_begin + i - adjust] = main48k[49152 - delta + i];
+				// copy in compression routine into main
+				for (i = 0; i < noc_launchigp_begin - adjust - 3; i++) main48k[noc_launchigp_pos + i] = noc_launchigp[i];
+				// last jp
+				for (i = 0; i < 3; i++) main48k[noc_launchigp_pos + noc_launchigp_begin - adjust - 3 + i] =
+					noc_launchigp[noc_launchigp_begin - 3 + i];
 			}
 		}
-		len.rrrr = zxsc(&main[startpos], comp, mainsize - delta, 0); // upto the full size - delta
+		len.rrrr = zxsc(&main48k[startpos], comp, mainsize - delta, 0); // upto the full size - delta
 		dgap = decompressf(comp, len.rrrr, mainsize);
 		delta += dgap;
 		if (delta > B_GAP) error(9);
@@ -614,28 +640,74 @@ int main(int argc, char* argv[]) {
 	unsigned char* comp_s;
 	rrrr len_s;
 	if ((comp_s = (unsigned char*)malloc((6912 + 216 + 109) * sizeof(unsigned char))) == NULL) error(8);
-	len_s.rrrr = zxsc(&main[0], &comp_s[scrload_len], 6912, 1);
+	len_s.rrrr = zxsc(&main48k[0], &comp_s[scrload_len], 6912, 1);
 	len_s.rrrr += scrload_len;
 	for (i = 0; i < scrload_len; i++) comp_s[i] = scrload[i]; // add m/c
-	// write screen
+	// write screen (b)
 	mdrfname[0] = 'S';
 	start.rrrr = 25088;
 	param.rrrr = 0xffff;
 	i = appendmdr(mdrname, mdrfname, cart, &sector, comp_s, len_s, start, param, 0x03);
 	fprintf(stdout, "S(%lu)+", len_s.rrrr);
 	free(comp_s);
-	// write main
+	//otek pages (c)
+	if (otek) {
+		unsigned char* comp_p;
+		rrrr len_p;
+		if ((comp_p = (unsigned char*)malloc((16384 + 512 + unpack_len) * sizeof(unsigned char))) == NULL) error(8);
+		len_p.rrrr = zxsc(&main[bank[4]], &comp_p[unpack_len], 16384, 0);
+		for (i = 0; i < unpack_len; i++) comp_p[i] = unpack[i]; // add in unpacker
+		len_p.rrrr += unpack_len;
+		fprintf(stdout, "1(%lu)+", len_p.rrrr);
+		mdrfname[0] = '1';
+		start.rrrr = 32256 - unpack_len;
+		param.rrrr = 0xffff;
+		i = appendmdr(mdrname, mdrfname, cart, &sector, comp_p, len_p, start, param, 0x03);
+		// page 3
+		mdrfname[0]++;
+		comp_p[0] = 0x13;
+		len_p.rrrr = zxsc(&main[bank[6]], &comp_p[1], 16384, 0);
+		len_p.rrrr++;
+		fprintf(stdout, "3(%lu)+", len_p.rrrr);
+		start.rrrr = 32255; // don't need to replace the unpacker, just the page number
+		i = appendmdr(mdrname, mdrfname, cart, &sector, comp_p, len_p, start, param, 0x03);
+		// page 4
+		mdrfname[0]++;
+		comp_p[0] = 0x14;
+		len_p.rrrr = zxsc(&main[bank[7]], &comp_p[1], 16384, 0);
+		len_p.rrrr++;
+		fprintf(stdout, "4(%lu)+", len_p.rrrr);
+		i = appendmdr(mdrname, mdrfname, cart, &sector, comp_p, len_p, start, param, 0x03);
+		// page 6
+		mdrfname[0]++;
+		comp_p[0] = 0x16;
+		len_p.rrrr = zxsc(&main[bank[9]], &comp_p[1], 16384, 0);
+		len_p.rrrr++;
+		fprintf(stdout, "6(%lu)+", len_p.rrrr);
+		i = appendmdr(mdrname, mdrfname, cart, &sector, comp_p, len_p, start, param, 0x03);
+		// page 7
+		mdrfname[0]++;
+		comp_p[0] = 0x17;
+		len_p.rrrr = zxsc(&main[bank[10]], &comp_p[1], 16384, 0);
+		len_p.rrrr++;
+		fprintf(stdout, "7(%lu)+", len_p.rrrr);
+		i = appendmdr(mdrname, mdrfname, cart, &sector, comp_p, len_p, start, param, 0x03);
+		free(comp_p);
+	}
+	// write main (d)
 	mdrfname[0] = 'M';
 	start.rrrr = 65536 - len.rrrr;
 	param.rrrr = 0xffff;
 	i = appendmdr(mdrname, mdrfname, cart, &sector, comp, len, start, param, 0x03);
 	fprintf(stdout, "M(%lu:D%d)+", len.rrrr, delta);
+	//
 	free(comp);
+	free(main);
 	//launcher
 	len.rrrr = 65536 - len.rrrr; // start of compression
 	launchmdr_full[launchmdr_full_cp] = noc_launchprt[noc_launchprt_cp] = len.r[0];
 	launchmdr_full[launchmdr_full_cp + 1] = noc_launchprt[noc_launchprt_cp + 1] = len.r[1];
-	// write launcher
+	// write launcher (e)
 	mdrfname[0] = 'L';
 	// if new then launcher in prtbuf
 	if (oldl == 0) { 
@@ -643,30 +715,35 @@ int main(int argc, char* argv[]) {
 		len.rrrr = 256;
 		startpos = 6912;
 		if (noc_launchigp_pos < 6912) {
-			for (i = 0; i < noc_launchprt_len; i++) main[noc_launchigp_pos + noc_launchigp_begin + delta + i] = main[6912 + i]; // copy prtbuf to screen
-			for (i = 0; i < delta; i++) main[noc_launchigp_pos + noc_launchigp_begin + i] = main[49152 - delta + i]; // copy delta to screen
-			for (i = 0; i < noc_launchigp_begin; i++) main[noc_launchigp_pos + i] = noc_launchigp[i]; // copy in compression routine into screen
+			for (i = 0; i < noc_launchprt_len; i++) main48k[noc_launchigp_pos + noc_launchigp_begin + delta + i] = main48k[6912 + i]; // copy prtbuf to screen
+			for (i = 0; i < delta; i++) main48k[noc_launchigp_pos + noc_launchigp_begin + i] = main48k[49152 - delta + i]; // copy delta to screen
+			for (i = 0; i < noc_launchigp_begin; i++) main48k[noc_launchigp_pos + i] = noc_launchigp[i]; // copy in compression routine into screen
 			start.rrrr = 23296 - (noc_launchigp_len + delta - 3);
 			len.rrrr = 256 + (noc_launchigp_len + delta - 3);
 			startpos -= (noc_launchigp_len + delta - 3);
 		}
-		for (i = 0; i < noc_launchprt_len; i++) main[i + 6912] = noc_launchprt[i]; // copy experimental loader into prtbuf
-		i = appendmdr(mdrname, mdrfname, cart, &sector, &main[startpos], len, start, param, 0x03);
+		for (i = 0; i < noc_launchprt_len; i++) main48k[i + 6912] = noc_launchprt[i]; // copy experimental loader into prtbuf
+		i = appendmdr(mdrname, mdrfname, cart, &sector, &main48k[startpos], len, start, param, 0x03);
 	}
 	// if old then in screen
 	else {
 		launchmdr_full[launchmdr_full_lcs] = delta; //adjust last copy for delta *old launcher only
-		for (i = 0; i < delta; i++) launchmdr_full[launchmdr_full_len + i] = main[49152 - delta + i]; //copy end delta*bytes to launcher *old launcher only
+		for (i = 0; i < delta; i++) launchmdr_full[launchmdr_full_len + i] = main48k[49152 - delta + i]; //copy end delta*bytes to launcher *old launcher only
 		len.rrrr = launchmdr_full_len + delta;
 		start.rrrr = 16384;
 		i = appendmdr(mdrname, mdrfname, cart, &sector, launchmdr_full, len, start, param, 0x03);
 	}
-	free(main);
+	free(main48k);
 	//count blank sectors to determine space
 	for (i = 0xfe, j = 0; i > 0; i--) {
 		if (cart[(0xfe - i) * 543 + 15] == 0x00) j++;
 	}
-	fprintf(stdout, "L(%lu)>F(%d)\n", len.rrrr, j * 543); // updated for interleave
+	fprintf(stdout, "L(%lu", len.rrrr);
+	if (stshift || adjust) fprintf(stdout, "{");
+	if (stshift) fprintf(stdout, "S^");
+	if (adjust) fprintf(stdout, "A:%d", adjust);
+	if(stshift||adjust) fprintf(stdout, "}");
+	fprintf(stdout, ")>T(%d<->%d)\n", (254 - j) * 543, j * 543); // updated for interleave
 	// create file and write cartridge
 	if ((fp_out = fopen(fmdr, "wb")) == NULL) error(3); // cannot open mdr for write
 	fwrite(cart, sizeof(unsigned char), mdrsize, fp_out);
