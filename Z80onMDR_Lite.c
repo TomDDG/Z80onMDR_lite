@@ -36,7 +36,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#define VERSION_NUM "v1.4"
+#define VERSION_NUM "v1.41"
 #define PROGNAME "Z80onMDR_lite"
 #define B_GAP 128
 #define MAXLENGTH 256
@@ -51,6 +51,7 @@
 //v1.3 handle stack in screen
 //v1.31 better stack handling
 //v1.4 more improvements to 3 stage loader, adjustable stack/gap loader to minimise memory differences. fixed some v2 48k z80 snapshot issue
+//v1.41 handle incompatible hardware types & 128k snapshots with non-default memory layout (0xc000 is not page 0)
 typedef union {
 	unsigned long int rrrr; //byte number
 	unsigned char r[4]; //split number into 4 8bit bytes in case of overflow
@@ -333,9 +334,9 @@ int main(int argc, char* argv[]) {
 		//  32      2       Program counter
 		launchmdr_full[launchmdr_full_jp] = noc_launchstk[noc_launchstk_jp] = fgetc(fp_in);
 		launchmdr_full[launchmdr_full_jp + 1] = noc_launchstk[noc_launchstk_jp + 1] = fgetc(fp_in);
-		//	34      1       Hardware mode
+		//	34      1       Hardware mode standard 0-6 (2 is SamRAM), 7 +3, 8 +3, 9 & 10 not supported, 11 Didatik, 12 +2, 13 +2A
 		c = fgetc(fp_in);
-		if (c == 2) error(4);
+		if (c == 2 || c == 9 || c == 10 || c == 11 || c > 13) error(4);
 		if (addlen.rrrr == 23 && c > 2) otek = 1; // v2 & c>2 then 128k, if v3 then c>3 is 128k
 		else if (c > 3) otek = 1;
 		//	35      1       If in 128 mode, contains last OUT to 0x7ffd
@@ -527,18 +528,20 @@ int main(int argc, char* argv[]) {
 		startpos += 256;
 		mainsize -= 256;
 	}
+	int pageshift = 42173; // 49152-6912-67
+	int pagedin = noc_launchigp[noc_launchigp_out] & 7; // Bits 0-2: RAM page (0-7) to map into memory at 0xc000.
+	if (pagedin > 0) {
+		pageshift -= 16384;
+	}
 	do {
-		for (i = 0; i < 49152; i++) {
-			main48k[i] = main[i]; // create copy of 1st 48k for manipulation
-			//printf("(%5d)%02x ",i, main[i]);
-		}
+		for (i = 0; i < 49152; i++) main48k[i] = main[i]; // create copy of 1st 48k for manipulation
 		// new byte series scan
 		if (oldl == 0) {
 			noc_launchigp_pos = 0;
 			// find gap
 			maxgap = maxpos = maxchr = 0;
 			for (vgap = 0x00; vgap <= 0xff; vgap++) { // cycle through all bytes
-				for (i = 0, j = 0; i < 42173; i++) { // also include rest of printer buffer
+				for (i = 0, j = 0; i < pageshift; i++) { // also include rest of printer buffer
 					if (main48k[i + 6912 + noc_launchprt_len] == vgap) {
 						j++;
 						if (j > maxgap && ((i + 6912 + noc_launchprt_len - j) > stackpos - 16384 || // start of gap > stack then ok
