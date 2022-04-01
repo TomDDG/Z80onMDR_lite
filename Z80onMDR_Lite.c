@@ -742,10 +742,13 @@ int main(int argc, char* argv[]) {
 		if (cart[(0xfe - i) * 543 + 15] == 0x00) j++;
 	}
 	fprintf(stdout, "L(%lu", len.rrrr);
-	if (stshift || adjust) fprintf(stdout, "{");
-	if (stshift) fprintf(stdout, "S^");
-	if (adjust) fprintf(stdout, "A:%d", adjust);
-	if(stshift||adjust) fprintf(stdout, "}");
+	if (stshift || adjust || pagedin) {
+		fprintf(stdout, "{");
+		if (pagedin) fprintf(stdout, "P:%d", pagedin);
+		if (stshift) fprintf(stdout, "S^");
+		if (adjust) fprintf(stdout, "A:%d", adjust);
+		fprintf(stdout, "}");
+	}
 	fprintf(stdout, ")>T(%d<->%d)\n", (254 - j) * 543, j * 543); // updated for interleave
 	// create file and write cartridge
 	if ((fp_out = fopen(fmdr, "wb")) == NULL) error(3); // cannot open mdr for write
