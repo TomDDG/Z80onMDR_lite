@@ -52,6 +52,7 @@
 //v1.31 better stack handling
 //v1.4 more improvements to 3 stage loader, adjustable stack/gap loader to minimise memory differences. fixed some v2 48k z80 snapshot issue
 //v1.41 handle incompatible hardware types & 128k snapshots with non-default memory layout (0xc000 is not page 0)
+//v1.5 handle .sna snapshots (48k only)
 typedef union {
 	unsigned long int rrrr; //byte number
 	unsigned char r[4]; //split number into 4 8bit bytes in case of overflow
@@ -75,8 +76,8 @@ int main(int argc, char* argv[]) {
 	//
 	if (argc < 2) {
 		fprintf(stdout, "%s %s (c) Tom Dalby 2021\n", PROGNAME, VERSION_NUM);
-		fprintf(stdout, "  usage: %s game.z80 [-o]\n", PROGNAME);
-		fprintf(stdout, "  which will convert the z80 image to a MicroDrive cartridge called \"game.mdr\"\n");
+		fprintf(stdout, "  usage: %s game.z80/sna [-o]\n", PROGNAME);
+		fprintf(stdout, "  which will convert the z80/sna image to a MicroDrive cartridge called \"game.mdr\"\n");
 		exit(0);
 	}
 	int oldl = 0;
@@ -84,8 +85,9 @@ int main(int argc, char* argv[]) {
 		oldl = 1; // use older screen based launcher
 		fprintf(stdout, "[O]");
 	}
-	if (strcmp(&argv[1][strlen(argv[1]) - 4], ".z80") != 0 && strcmp(&argv[1][strlen(argv[1]) - 4], ".Z80") != 0) error(1); // argument isn't .z80 or .Z80
-	//create ouput mdr name from input z80
+	if (strcmp(&argv[1][strlen(argv[1]) - 4], ".z80") != 0 && strcmp(&argv[1][strlen(argv[1]) - 4], ".Z80") != 0 &&
+		strcmp(&argv[1][strlen(argv[1]) - 4], ".sna") != 0 && strcmp(&argv[1][strlen(argv[1]) - 4], ".SNA") != 0) error(1); // argument isn't .z80/sna or .Z80/SNA
+	//create ouput mdr name from input
 	char* fz80 = argv[1];
 	char fmdr[256]; // limit to 256chars
 	for (i = 0; i < strlen(fz80) - 4 && i < 252; i++) fmdr[i] = fz80[i];
@@ -93,7 +95,10 @@ int main(int argc, char* argv[]) {
 	strcat(fmdr, ".mdr");
 	//open read/write
 	FILE* fp_in, * fp_out;
-	if ((fp_in = fopen(fz80, "rb")) == NULL) error(2); // cannot open z80 for read
+	if ((fp_in = fopen(fz80, "rb")) == NULL) error(2); // cannot open snapshot for read
+	// z80 or sna?
+	int snap = 0;
+	if (strcmp(&fz80[strlen(fz80) - 4], ".sna") == 0 || strcmp(&fz80[strlen(fz80) - 4], ".SNA") == 0) snap = 1;
 	// 48k basic loader
 #define mdrbl48k_brd 16
 #define mdrbl48k_pap 22
@@ -250,120 +255,183 @@ int main(int argc, char* argv[]) {
 								0xe0, 0x07, 0x07, 0x07, 0xfe, 0x07, 0x20, 0x02, 0x86, 0x23, 0xc6, 0x02, 0x4f, 0x88, 0x91, 0x47,
 								0xf1, 0xe5, 0xc5, 0xe6, 0x1f, 0x47, 0x4e, 0x62, 0x6b, 0x37, 0xed, 0x42, 0xc1, 0xed, 0xb0, 0xe1,
 								0x23, 0x18, 0xd1, 0x3e, 0x10, 0x01, 0xfd, 0x7f, 0xed, 0x79, 0xfb, 0xc9, 0x11 };
-	//read in z80 starting with header
-	//	0       1       A register
-	launchmdr_full[launchmdr_full_a] = noc_launchstk[noc_launchstk_a] = fgetc(fp_in);
-	//	1       1       F register
-	launchmdr_full[launchmdr_full_if] = noc_launchstk[noc_launchstk_if] = fgetc(fp_in);
-	//	2       2       BC register pair(LSB, i.e.C, first)
-	launchmdr_full[launchmdr_full_bc] = noc_launchstk[noc_launchstk_bc] = fgetc(fp_in);
-	launchmdr_full[launchmdr_full_bc + 1] = noc_launchstk[noc_launchstk_bc + 1] = fgetc(fp_in);
-	//	4       2       HL register pair
-	launchmdr_full[launchmdr_full_hl] = noc_launchstk[noc_launchstk_hl] = fgetc(fp_in);
-	launchmdr_full[launchmdr_full_hl + 1] = noc_launchstk[noc_launchstk_hl + 1] = fgetc(fp_in);
-	//	6       2       Program counter (if zero then version 2 or 3 snapshot)
-	launchmdr_full[launchmdr_full_jp] = noc_launchstk[noc_launchstk_jp] = fgetc(fp_in);
-	launchmdr_full[launchmdr_full_jp + 1] = noc_launchstk[noc_launchstk_jp + 1] = fgetc(fp_in);
-	//	8       2       Stack pointer
-	launchmdr_full[launchmdr_full_sp] = fgetc(fp_in);
-	launchmdr_full[launchmdr_full_sp + 1] = fgetc(fp_in);
-	int stackpos = launchmdr_full[launchmdr_full_sp + 1] * 256 + launchmdr_full[launchmdr_full_sp];
-	if (stackpos == 0) stackpos = 65536;
-	noc_launchstk_pos = stackpos - noc_launchstk_len; // pos of stack code
-	len.rrrr = noc_launchstk_pos + noc_launchstk_afa;
-	noc_launchigp[noc_launchigp_rd] = len.r[0];
-	noc_launchigp[noc_launchigp_rd + 1] = len.r[1]; // start of stack within stack
-	//	10      1       Interrupt register
-	launchmdr_full[launchmdr_full_if + 1] = noc_launchstk[noc_launchstk_if + 1] = fgetc(fp_in);
-	//	11      1       Refresh register (Bit 7 is not significant!)
-	launchmdr_full[launchmdr_full_r] = fgetc(fp_in) - 6; // r, reduce by 6 so correct on launch
-	noc_launchstk[noc_launchstk_r] = launchmdr_full[launchmdr_full_r] + 1; // 5 for 3 stage launcher
-	//	12      1       Bit 0: Bit 7 of r register; Bit 1-3: Border colour; Bit 4=1: SamROM; Bit 5=1:v1 Compressed; Bit 6-7: N/A
-	c = fgetc(fp_in);
-	unsigned char compressed = (c & 32) >> 5;	// 1 compressed, 0 not
-	if (c & 1 || c > 127) {
-		launchmdr_full[launchmdr_full_r] = launchmdr_full[launchmdr_full_r] | 128;	// r high bit set
-		noc_launchstk[noc_launchstk_r] = noc_launchstk[noc_launchstk_r] | 128;	// r high bit set
-	}
-	else {
-		launchmdr_full[launchmdr_full_r] = launchmdr_full[launchmdr_full_r] & 127;	//r high bit reset
-		noc_launchstk[noc_launchstk_r] = noc_launchstk[noc_launchstk_r] & 127;	//r high bit reset
-	}
-	mdrbl48k[mdrbl48k_brd] = mdrbl128k[mdrbl128k_brd] = mdrbl48k[mdrbl48k_pap] = mdrbl128k[mdrbl128k_pap] = ((c & 14) >> 1) + 0x30; //border/paper col
-	//	13      2       DE register pair
-	launchmdr_full[launchmdr_full_de] = noc_launchigp[noc_launchigp_de] = fgetc(fp_in);
-	launchmdr_full[launchmdr_full_de + 1] = noc_launchigp[noc_launchigp_de + 1] = fgetc(fp_in);
-	//	15      2       BC' register pair
-	launchmdr_full[launchmdr_full_bca] = noc_launchigp[noc_launchigp_bca] = fgetc(fp_in);
-	launchmdr_full[launchmdr_full_bca + 1] = noc_launchigp[noc_launchigp_bca + 1] = fgetc(fp_in);
-	//	17      2       DE' register pair
-	launchmdr_full[launchmdr_full_dea] = noc_launchigp[noc_launchigp_dea] = fgetc(fp_in);
-	launchmdr_full[launchmdr_full_dea + 1] = noc_launchigp[noc_launchigp_dea + 1] = fgetc(fp_in);
-	//	19      2       HL' register pair
-	launchmdr_full[launchmdr_full_hla] = noc_launchigp[noc_launchigp_hla] = fgetc(fp_in);
-	launchmdr_full[launchmdr_full_hla + 1] = noc_launchigp[noc_launchigp_hla + 1] = fgetc(fp_in);
-	//	21      1       A' register
-	launchmdr_full[launchmdr_full_afa + 1] = noc_launchstk[noc_launchstk_afa + 1] = fgetc(fp_in);
-	//	22      1       F' register
-	launchmdr_full[launchmdr_full_afa] = noc_launchstk[noc_launchstk_afa] = fgetc(fp_in);
-	//	23      2       IY register (Again LSB first)
-	launchmdr_full[launchmdr_full_iy] = noc_launchigp[noc_launchigp_iy] = fgetc(fp_in);
-	launchmdr_full[launchmdr_full_iy + 1] = noc_launchigp[noc_launchigp_iy + 1] = fgetc(fp_in);
-	//	25      2       IX register
-	launchmdr_full[launchmdr_full_ix] = noc_launchigp[noc_launchigp_ix] = fgetc(fp_in);
-	launchmdr_full[launchmdr_full_ix + 1] = noc_launchigp[noc_launchigp_ix + 1] = fgetc(fp_in);
-	//	27      1       Interrupt flipflop, 0 = DI, otherwise EI
-	c = fgetc(fp_in);
-	if (c == 0) launchmdr_full[launchmdr_full_ei] = noc_launchstk[noc_launchstk_ei] = 0xf3;	//di
-	else launchmdr_full[launchmdr_full_ei] = noc_launchstk[noc_launchstk_ei] = 0xfb;	//ei
-	//	28      1       IFF2 [IGNORED]
-	c = fgetc(fp_in);
-	//	29      1       Bit 0-1: IM(0, 1 or 2); Bit 2-7: N/A
-	c = fgetc(fp_in) & 3;
-	if (c == 0) launchmdr_full[launchmdr_full_im] = noc_launchstk[noc_launchstk_im] = 0x46; //im 0
-	else if (c == 1) launchmdr_full[launchmdr_full_im] = noc_launchstk[noc_launchstk_im] = 0x56; //im 1
-	else launchmdr_full[launchmdr_full_im] = noc_launchstk[noc_launchstk_im] = 0x5e; //im 2
-	// version 2 & 3 only
+	//
+	int otek = 0, stackpos = 0;
+	unsigned char compressed = 0;
 	rrrr addlen;
 	addlen.rrrr = 0; // 0 indicates v1, 23 for v2 otherwise v3
-	int otek = 0;
-	if (launchmdr_full[launchmdr_full_jp] == 0 && launchmdr_full[launchmdr_full_jp + 1] == 0) {
-		//  30      2       Length of additional header block
-		addlen.r[0] = fgetc(fp_in);
-		addlen.r[1] = fgetc(fp_in);
-		//  32      2       Program counter
+	//read is sna, compressed=0, addlen.rrrr=0, otek=0
+	if (snap) {
+		//	$00  I	Interrupt register
+		launchmdr_full[launchmdr_full_if + 1] = noc_launchstk[noc_launchstk_if + 1] = fgetc(fp_in);
+		//	$01  HL'
+		launchmdr_full[launchmdr_full_hla] = noc_launchigp[noc_launchigp_hla] = fgetc(fp_in);
+		launchmdr_full[launchmdr_full_hla + 1] = noc_launchigp[noc_launchigp_hla + 1] = fgetc(fp_in);
+		//	$03  DE'
+		launchmdr_full[launchmdr_full_dea] = noc_launchigp[noc_launchigp_dea] = fgetc(fp_in);
+		launchmdr_full[launchmdr_full_dea + 1] = noc_launchigp[noc_launchigp_dea + 1] = fgetc(fp_in);
+		//	$05  BC'
+		launchmdr_full[launchmdr_full_bca] = noc_launchigp[noc_launchigp_bca] = fgetc(fp_in);
+		launchmdr_full[launchmdr_full_bca + 1] = noc_launchigp[noc_launchigp_bca + 1] = fgetc(fp_in);
+		//	$07  F'
+		launchmdr_full[launchmdr_full_afa] = noc_launchstk[noc_launchstk_afa] = fgetc(fp_in);
+		//	$08  A'
+		launchmdr_full[launchmdr_full_afa + 1] = noc_launchstk[noc_launchstk_afa + 1] = fgetc(fp_in);
+		//	$09  HL	
+		launchmdr_full[launchmdr_full_hl] = noc_launchstk[noc_launchstk_hl] = fgetc(fp_in);
+		launchmdr_full[launchmdr_full_hl + 1] = noc_launchstk[noc_launchstk_hl + 1] = fgetc(fp_in);
+		//	$0B  DE
+		launchmdr_full[launchmdr_full_de] = noc_launchigp[noc_launchigp_de] = fgetc(fp_in);
+		launchmdr_full[launchmdr_full_de + 1] = noc_launchigp[noc_launchigp_de + 1] = fgetc(fp_in);
+		//	$0D  BC
+		launchmdr_full[launchmdr_full_bc] = noc_launchstk[noc_launchstk_bc] = fgetc(fp_in);
+		launchmdr_full[launchmdr_full_bc + 1] = noc_launchstk[noc_launchstk_bc + 1] = fgetc(fp_in);
+		//	$0F  IY
+		launchmdr_full[launchmdr_full_iy] = noc_launchigp[noc_launchigp_iy] = fgetc(fp_in);
+		launchmdr_full[launchmdr_full_iy + 1] = noc_launchigp[noc_launchigp_iy + 1] = fgetc(fp_in);
+		//	$11  IX
+		launchmdr_full[launchmdr_full_ix] = noc_launchigp[noc_launchigp_ix] = fgetc(fp_in);
+		launchmdr_full[launchmdr_full_ix + 1] = noc_launchigp[noc_launchigp_ix + 1] = fgetc(fp_in);
+		//	$13  0 for DI otherwise EI
+		c = fgetc(fp_in);
+		if (c == 0) launchmdr_full[launchmdr_full_ei] = noc_launchstk[noc_launchstk_ei] = 0xf3;	//di
+		else launchmdr_full[launchmdr_full_ei] = noc_launchstk[noc_launchstk_ei] = 0xfb;	//ei
+		//	$14  R
+		launchmdr_full[launchmdr_full_r] = launchmdr_full[launchmdr_full_r] = fgetc(fp_in);
+		//	$15  F
+		launchmdr_full[launchmdr_full_if] = noc_launchstk[noc_launchstk_if] = fgetc(fp_in);
+		//	$16  A
+		launchmdr_full[launchmdr_full_a] = noc_launchstk[noc_launchstk_a] = fgetc(fp_in);
+		//	$17  SP
+		launchmdr_full[launchmdr_full_sp] = fgetc(fp_in);
+		launchmdr_full[launchmdr_full_sp + 1] = fgetc(fp_in);
+		stackpos = launchmdr_full[launchmdr_full_sp + 1] * 256 + launchmdr_full[launchmdr_full_sp] + 2;
+		if (stackpos == 0) stackpos = 65536;
+		noc_launchstk_pos = stackpos - noc_launchstk_len; // pos of stack code
+		len.rrrr = noc_launchstk_pos + noc_launchstk_afa;
+		noc_launchigp[noc_launchigp_rd] = len.r[0];
+		noc_launchigp[noc_launchigp_rd + 1] = len.r[1]; // start of stack within stack
+		// $19  Interrupt mode IM(0, 1 or 2)
+		c = fgetc(fp_in) & 3;
+		if (c == 0) launchmdr_full[launchmdr_full_im] = noc_launchstk[noc_launchstk_im] = 0x46; //im 0
+		else if (c == 1) launchmdr_full[launchmdr_full_im] = noc_launchstk[noc_launchstk_im] = 0x56; //im 1
+		else launchmdr_full[launchmdr_full_im] = noc_launchstk[noc_launchstk_im] = 0x5e; //im 2
+		//	$1A  Border colour
+		mdrbl48k[mdrbl48k_brd] = mdrbl128k[mdrbl128k_brd] = mdrbl48k[mdrbl48k_pap] = mdrbl128k[mdrbl128k_pap] = fgetc(fp_in) + 0x30;
+	}
+	else {
+		//read in z80 starting with header
+		//	0       1       A register
+		launchmdr_full[launchmdr_full_a] = noc_launchstk[noc_launchstk_a] = fgetc(fp_in);
+		//	1       1       F register
+		launchmdr_full[launchmdr_full_if] = noc_launchstk[noc_launchstk_if] = fgetc(fp_in);
+		//	2       2       BC register pair(LSB, i.e.C, first)
+		launchmdr_full[launchmdr_full_bc] = noc_launchstk[noc_launchstk_bc] = fgetc(fp_in);
+		launchmdr_full[launchmdr_full_bc + 1] = noc_launchstk[noc_launchstk_bc + 1] = fgetc(fp_in);
+		//	4       2       HL register pair
+		launchmdr_full[launchmdr_full_hl] = noc_launchstk[noc_launchstk_hl] = fgetc(fp_in);
+		launchmdr_full[launchmdr_full_hl + 1] = noc_launchstk[noc_launchstk_hl + 1] = fgetc(fp_in);
+		//	6       2       Program counter (if zero then version 2 or 3 snapshot)
 		launchmdr_full[launchmdr_full_jp] = noc_launchstk[noc_launchstk_jp] = fgetc(fp_in);
 		launchmdr_full[launchmdr_full_jp + 1] = noc_launchstk[noc_launchstk_jp + 1] = fgetc(fp_in);
-		//	34      1       Hardware mode standard 0-6 (2 is SamRAM), 7 +3, 8 +3, 9 & 10 not supported, 11 Didatik, 12 +2, 13 +2A
+		//	8       2       Stack pointer
+		launchmdr_full[launchmdr_full_sp] = fgetc(fp_in);
+		launchmdr_full[launchmdr_full_sp + 1] = fgetc(fp_in);
+		stackpos = launchmdr_full[launchmdr_full_sp + 1] * 256 + launchmdr_full[launchmdr_full_sp];
+		if (stackpos == 0) stackpos = 65536;
+		noc_launchstk_pos = stackpos - noc_launchstk_len; // pos of stack code
+		len.rrrr = noc_launchstk_pos + noc_launchstk_afa;
+		noc_launchigp[noc_launchigp_rd] = len.r[0];
+		noc_launchigp[noc_launchigp_rd + 1] = len.r[1]; // start of stack within stack
+		//	10      1       Interrupt register
+		launchmdr_full[launchmdr_full_if + 1] = noc_launchstk[noc_launchstk_if + 1] = fgetc(fp_in);
+		//	11      1       Refresh register (Bit 7 is not significant!)
+		launchmdr_full[launchmdr_full_r] = fgetc(fp_in) - 6; // r, reduce by 6 so correct on launch
+		noc_launchstk[noc_launchstk_r] = launchmdr_full[launchmdr_full_r] + 1; // 5 for 3 stage launcher
+		//	12      1       Bit 0: Bit 7 of r register; Bit 1-3: Border colour; Bit 4=1: SamROM; Bit 5=1:v1 Compressed; Bit 6-7: N/A
 		c = fgetc(fp_in);
-		if (c == 2 || c == 9 || c == 10 || c == 11 || c > 13) error(4);
-		if (addlen.rrrr == 23 && c > 2) otek = 1; // v2 & c>2 then 128k, if v3 then c>3 is 128k
-		else if (c > 3) otek = 1;
-		//	35      1       If in 128 mode, contains last OUT to 0x7ffd
+		compressed = (c & 32) >> 5;	// 1 compressed, 0 not
+		if (c & 1 || c > 127) {
+			launchmdr_full[launchmdr_full_r] = launchmdr_full[launchmdr_full_r] | 128;	// r high bit set
+			noc_launchstk[noc_launchstk_r] = noc_launchstk[noc_launchstk_r] | 128;	// r high bit set
+		}
+		else {
+			launchmdr_full[launchmdr_full_r] = launchmdr_full[launchmdr_full_r] & 127;	//r high bit reset
+			noc_launchstk[noc_launchstk_r] = noc_launchstk[noc_launchstk_r] & 127;	//r high bit reset
+		}
+		mdrbl48k[mdrbl48k_brd] = mdrbl128k[mdrbl128k_brd] = mdrbl48k[mdrbl48k_pap] = mdrbl128k[mdrbl128k_pap] = ((c & 14) >> 1) + 0x30; //border/paper col
+		//	13      2       DE register pair
+		launchmdr_full[launchmdr_full_de] = noc_launchigp[noc_launchigp_de] = fgetc(fp_in);
+		launchmdr_full[launchmdr_full_de + 1] = noc_launchigp[noc_launchigp_de + 1] = fgetc(fp_in);
+		//	15      2       BC' register pair
+		launchmdr_full[launchmdr_full_bca] = noc_launchigp[noc_launchigp_bca] = fgetc(fp_in);
+		launchmdr_full[launchmdr_full_bca + 1] = noc_launchigp[noc_launchigp_bca + 1] = fgetc(fp_in);
+		//	17      2       DE' register pair
+		launchmdr_full[launchmdr_full_dea] = noc_launchigp[noc_launchigp_dea] = fgetc(fp_in);
+		launchmdr_full[launchmdr_full_dea + 1] = noc_launchigp[noc_launchigp_dea + 1] = fgetc(fp_in);
+		//	19      2       HL' register pair
+		launchmdr_full[launchmdr_full_hla] = noc_launchigp[noc_launchigp_hla] = fgetc(fp_in);
+		launchmdr_full[launchmdr_full_hla + 1] = noc_launchigp[noc_launchigp_hla + 1] = fgetc(fp_in);
+		//	21      1       A' register
+		launchmdr_full[launchmdr_full_afa + 1] = noc_launchstk[noc_launchstk_afa + 1] = fgetc(fp_in);
+		//	22      1       F' register
+		launchmdr_full[launchmdr_full_afa] = noc_launchstk[noc_launchstk_afa] = fgetc(fp_in);
+		//	23      2       IY register (Again LSB first)
+		launchmdr_full[launchmdr_full_iy] = noc_launchigp[noc_launchigp_iy] = fgetc(fp_in);
+		launchmdr_full[launchmdr_full_iy + 1] = noc_launchigp[noc_launchigp_iy + 1] = fgetc(fp_in);
+		//	25      2       IX register
+		launchmdr_full[launchmdr_full_ix] = noc_launchigp[noc_launchigp_ix] = fgetc(fp_in);
+		launchmdr_full[launchmdr_full_ix + 1] = noc_launchigp[noc_launchigp_ix + 1] = fgetc(fp_in);
+		//	27      1       Interrupt flipflop, 0 = DI, otherwise EI
 		c = fgetc(fp_in);
-		if (otek) launchmdr_full[launchmdr_full_out] = noc_launchigp[noc_launchigp_out] = c;
-		//	36      1       Contains 0xff if Interface I rom paged [SKIPPED]
-		//	37      1       Hardware Modify Byte [SKIPPED]
-		//	38      1       Last OUT to port 0xfffd (soundchip register number) [SKIPPED]
-		//	39      16      Contents of the sound chip registers [SKIPPED] *ideally for 128k setting ay registers make sense, however in practise never found it is needed
-		fseek(fp_in, 19, SEEK_CUR);
-		// following is only in v3 snapshots
-		//	55      2       Low T state counter [SKIPPED]
-		//	57      1       Hi T state counter [SKIPPED]
-		//	58      1       Flag byte used by Spectator(QL spec.emulator) [SKIPPED]
-		//	59      1       0xff if MGT Rom paged [SKIPPED]
-		//	60      1       0xff if Multiface Rom paged.Should always be 0. [SKIPPED]
-		//	61      1       0xff if 0 - 8191 is ROM, 0 if RAM [SKIPPED]
-		//	62      1       0xff if 8192 - 16383 is ROM, 0 if RAM [SKIPPED]
-		//	63      10      5 x keyboard mappings for user defined joystick [SKIPPED]
-		//	73      10      5 x ASCII word : keys corresponding to mappings above [SKIPPED]
-		//	83      1       MGT type : 0 = Disciple + Epson, 1 = Disciple + HP, 16 = Plus D [SKIPPED]
-		//	84      1       Disciple inhibit button status : 0 = out, 0ff = in [SKIPPED]
-		//	85      1       Disciple inhibit flag : 0 = rom pageable, 0ff = not [SKIPPED]
-		if (addlen.rrrr > 23) fseek(fp_in, 31, SEEK_CUR);
-		// only if version 3 & 55 additional length
-		//	86      1       Last OUT to port 0x1ffd, ignored for Microdrive as only applicable on +3/+2A machines [SKIPPED]
-		if (addlen.rrrr == 55) 	if ((fgetc(fp_in) & 1) == 1) error(5); //special page mode so exit as not compatible with earlier 128k machines
+		if (c == 0) launchmdr_full[launchmdr_full_ei] = noc_launchstk[noc_launchstk_ei] = 0xf3;	//di
+		else launchmdr_full[launchmdr_full_ei] = noc_launchstk[noc_launchstk_ei] = 0xfb;	//ei
+		//	28      1       IFF2 [IGNORED]
+		c = fgetc(fp_in);
+		//	29      1       Bit 0-1: IM(0, 1 or 2); Bit 2-7: N/A
+		c = fgetc(fp_in) & 3;
+		if (c == 0) launchmdr_full[launchmdr_full_im] = noc_launchstk[noc_launchstk_im] = 0x46; //im 0
+		else if (c == 1) launchmdr_full[launchmdr_full_im] = noc_launchstk[noc_launchstk_im] = 0x56; //im 1
+		else launchmdr_full[launchmdr_full_im] = noc_launchstk[noc_launchstk_im] = 0x5e; //im 2
+		// version 2 & 3 only
+		if (launchmdr_full[launchmdr_full_jp] == 0 && launchmdr_full[launchmdr_full_jp + 1] == 0) {
+			//  30      2       Length of additional header block
+			addlen.r[0] = fgetc(fp_in);
+			addlen.r[1] = fgetc(fp_in);
+			//  32      2       Program counter
+			launchmdr_full[launchmdr_full_jp] = noc_launchstk[noc_launchstk_jp] = fgetc(fp_in);
+			launchmdr_full[launchmdr_full_jp + 1] = noc_launchstk[noc_launchstk_jp + 1] = fgetc(fp_in);
+			//	34      1       Hardware mode standard 0-6 (2 is SamRAM), 7 +3, 8 +3 & 10 not supported, 11 Didatik, 12 +2, 13 +2A
+			c = fgetc(fp_in);
+			if (c == 2 || c == 10 || c == 11 || c > 13) error(4);
+			if (addlen.rrrr == 23 && c > 2) otek = 1; // v2 & c>2 then 128k, if v3 then c>3 is 128k
+			else if (c > 3) otek = 1;
+			//	35      1       If in 128 mode, contains last OUT to 0x7ffd
+			c = fgetc(fp_in);
+			if (otek) launchmdr_full[launchmdr_full_out] = noc_launchigp[noc_launchigp_out] = c;
+			//	36      1       Contains 0xff if Interface I rom paged [SKIPPED]
+			//	37      1       Hardware Modify Byte [SKIPPED]
+			//	38      1       Last OUT to port 0xfffd (soundchip register number) [SKIPPED]
+			//	39      16      Contents of the sound chip registers [SKIPPED] *ideally for 128k setting ay registers make sense, however in practise never found it is needed
+			fseek(fp_in, 19, SEEK_CUR);
+			// following is only in v3 snapshots
+			//	55      2       Low T state counter [SKIPPED]
+			//	57      1       Hi T state counter [SKIPPED]
+			//	58      1       Flag byte used by Spectator(QL spec.emulator) [SKIPPED]
+			//	59      1       0xff if MGT Rom paged [SKIPPED]
+			//	60      1       0xff if Multiface Rom paged.Should always be 0. [SKIPPED]
+			//	61      1       0xff if 0 - 8191 is ROM, 0 if RAM [SKIPPED]
+			//	62      1       0xff if 8192 - 16383 is ROM, 0 if RAM [SKIPPED]
+			//	63      10      5 x keyboard mappings for user defined joystick [SKIPPED]
+			//	73      10      5 x ASCII word : keys corresponding to mappings above [SKIPPED]
+			//	83      1       MGT type : 0 = Disciple + Epson, 1 = Disciple + HP, 16 = Plus D [SKIPPED]
+			//	84      1       Disciple inhibit button status : 0 = out, 0ff = in [SKIPPED]
+			//	85      1       Disciple inhibit flag : 0 = rom pageable, 0ff = not [SKIPPED]
+			if (addlen.rrrr > 23) fseek(fp_in, 31, SEEK_CUR);
+			// only if version 3 & 55 additional length
+			//	86      1       Last OUT to port 0x1ffd, ignored for Microdrive as only applicable on +3/+2A machines [SKIPPED]
+			if (addlen.rrrr == 55) 	if ((fgetc(fp_in) & 1) == 1) error(5); //special page mode so exit as not compatible with earlier 128k machines
+		}
 	}
 	//space for decompression of z80
 	//8 * 16384 = 131072bytes
@@ -378,7 +446,8 @@ int main(int argc, char* argv[]) {
 	int bank[11], bankend;
 	for (i = 0; i < 11; i++) bank[i] = 99; //default
 	if (addlen.rrrr == 0) { // version 1 snapshot & 48k only
-		fprintf(stdout, "v1-");
+		if(snap) fprintf(stdout, "SNA-");
+		else fprintf(stdout, "v1-");
 		if (!compressed) {
 			if (fread(main, sizeof(unsigned char), 49152, fp_in) != 49152) error(7);
 		}
@@ -432,6 +501,11 @@ int main(int argc, char* argv[]) {
 		} while (bankend);
 	}
 	fclose(fp_in);
+	//
+	if (snap) {
+		launchmdr_full[launchmdr_full_jp] = noc_launchstk[noc_launchstk_jp] = main[stackpos - 16384 - 2];
+		launchmdr_full[launchmdr_full_jp + 1] = noc_launchstk[noc_launchstk_jp + 1] = main[stackpos - 16384 - 1];
+	}
 	//
 	if (stackpos < 23296) { // stack in screen?
 		i = launchmdr_full[launchmdr_full_jp + 1] * 256 + launchmdr_full[launchmdr_full_jp] - 16384;
