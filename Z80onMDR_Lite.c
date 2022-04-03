@@ -36,7 +36,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#define VERSION_NUM "v1.41"
+#define VERSION_NUM "v1.51"
 #define PROGNAME "Z80onMDR_lite"
 #define B_GAP 128
 #define MAXLENGTH 256
@@ -53,6 +53,7 @@
 //v1.4 more improvements to 3 stage loader, adjustable stack/gap loader to minimise memory differences. fixed some v2 48k z80 snapshot issue
 //v1.41 handle incompatible hardware types & 128k snapshots with non-default memory layout (0xc000 is not page 0)
 //v1.5 handle .sna snapshots (48k only)
+//v1.51 handle non-standard border colours
 typedef union {
 	unsigned long int rrrr; //byte number
 	unsigned char r[4]; //split number into 4 8bit bytes in case of overflow
@@ -317,7 +318,7 @@ int main(int argc, char* argv[]) {
 		else if (c == 1) launchmdr_full[launchmdr_full_im] = noc_launchstk[noc_launchstk_im] = 0x56; //im 1
 		else launchmdr_full[launchmdr_full_im] = noc_launchstk[noc_launchstk_im] = 0x5e; //im 2
 		//	$1A  Border colour
-		mdrbl48k[mdrbl48k_brd] = mdrbl128k[mdrbl128k_brd] = mdrbl48k[mdrbl48k_pap] = mdrbl128k[mdrbl128k_pap] = fgetc(fp_in) + 0x30;
+		mdrbl48k[mdrbl48k_brd] = mdrbl128k[mdrbl128k_brd] = mdrbl48k[mdrbl48k_pap] = mdrbl128k[mdrbl128k_pap] = (fgetc(fp_in) & 7) + 0x30;
 	}
 	else {
 		//read in z80 starting with header
