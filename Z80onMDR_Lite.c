@@ -33,10 +33,11 @@
 // E11 - cartridge full (unlikely with a single z80)
 // E12 - stack clashes with launcher
 // E13 - program counter clashes with launcher
+// E14 - SNA snapshot issue
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#define VERSION_NUM "v1.51"
+#define VERSION_NUM "v1.6"
 #define PROGNAME "Z80onMDR_lite"
 #define B_GAP 128
 #define MAXLENGTH 256
@@ -54,6 +55,7 @@
 //v1.41 handle incompatible hardware types & 128k snapshots with non-default memory layout (0xc000 is not page 0)
 //v1.5 handle .sna snapshots (48k only)
 //v1.51 handle non-standard border colours
+//v1.6 128k snapshots as well
 typedef union {
 	unsigned long int rrrr; //byte number
 	unsigned char r[4]; //split number into 4 8bit bytes in case of overflow
@@ -97,6 +99,10 @@ int main(int argc, char* argv[]) {
 	//open read/write
 	FILE* fp_in, * fp_out;
 	if ((fp_in = fopen(fz80, "rb")) == NULL) error(2); // cannot open snapshot for read
+	// get filesize
+	fseek(fp_in, 0, SEEK_END); // jump to the end of the file to get the length
+	int filesize = ftell(fp_in); // get the file size
+	rewind(fp_in);
 	// z80 or sna?
 	int snap = 0;
 	if (strcmp(&fz80[strlen(fz80) - 4], ".sna") == 0 || strcmp(&fz80[strlen(fz80) - 4], ".SNA") == 0) snap = 1;
@@ -263,6 +269,8 @@ int main(int argc, char* argv[]) {
 	addlen.rrrr = 0; // 0 indicates v1, 23 for v2 otherwise v3
 	//read is sna, compressed=0, addlen.rrrr=0, otek=0
 	if (snap) {
+		if (filesize < 49179) error(14);
+		if (filesize >= 131103) otek = 1; // 128k snapshot
 		//	$00  I	Interrupt register
 		launchmdr_full[launchmdr_full_if + 1] = noc_launchstk[noc_launchstk_if + 1] = fgetc(fp_in);
 		//	$01  HL'
@@ -271,6 +279,11 @@ int main(int argc, char* argv[]) {
 		//	$03  DE'
 		launchmdr_full[launchmdr_full_dea] = noc_launchigp[noc_launchigp_dea] = fgetc(fp_in);
 		launchmdr_full[launchmdr_full_dea + 1] = noc_launchigp[noc_launchigp_dea + 1] = fgetc(fp_in);
+		// check this is a SNA snapshot
+		if (launchmdr_full[launchmdr_full_if + 1] == 'M' && launchmdr_full[launchmdr_full_hla] == 'V' &&
+			launchmdr_full[launchmdr_full_hla + 1] == ' ' && launchmdr_full[launchmdr_full_dea] == '-') error(14);
+		if (launchmdr_full[launchmdr_full_if + 1] == 'Z' && launchmdr_full[launchmdr_full_hla] == 'X' &&
+			launchmdr_full[launchmdr_full_hla + 1] == '8' && launchmdr_full[launchmdr_full_dea] == '2') error(14);
 		//	$05  BC'
 		launchmdr_full[launchmdr_full_bca] = noc_launchigp[noc_launchigp_bca] = fgetc(fp_in);
 		launchmdr_full[launchmdr_full_bca + 1] = noc_launchigp[noc_launchigp_bca + 1] = fgetc(fp_in);
@@ -306,7 +319,8 @@ int main(int argc, char* argv[]) {
 		//	$17  SP
 		launchmdr_full[launchmdr_full_sp] = fgetc(fp_in);
 		launchmdr_full[launchmdr_full_sp + 1] = fgetc(fp_in);
-		stackpos = launchmdr_full[launchmdr_full_sp + 1] * 256 + launchmdr_full[launchmdr_full_sp] + 2;
+		if(otek) stackpos = launchmdr_full[launchmdr_full_sp + 1] * 256 + launchmdr_full[launchmdr_full_sp];
+		else stackpos = launchmdr_full[launchmdr_full_sp + 1] * 256 + launchmdr_full[launchmdr_full_sp] + 2;
 		if (stackpos == 0) stackpos = 65536;
 		noc_launchstk_pos = stackpos - noc_launchstk_len; // pos of stack code
 		len.rrrr = noc_launchstk_pos + noc_launchstk_afa;
@@ -446,14 +460,117 @@ int main(int argc, char* argv[]) {
 	len.rrrr = 0;
 	int bank[11], bankend;
 	for (i = 0; i < 11; i++) bank[i] = 99; //default
+	//set-up bank locations
+	if (otek) {
+		bank[3] = 32768; //page 0
+		bank[4] = 49152; //page 1
+		bank[5] = 16384; //page 2
+		bank[6] = 65536; //page 3
+		bank[7] = 81920; //page 4
+		bank[8] = 0; //page 5
+		bank[9] = 98304; //page 6
+		bank[10] = 114688; //page 7
+		bankend = 8;
+	}
+	else {
+		bank[4] = 16384; //page 2
+		bank[5] = 32768; //page 0
+		bank[8] = 0; //page 5
+		bankend = 3;
+	}
 	if (addlen.rrrr == 0) { // version 1 snapshot & 48k only
-		if(snap) fprintf(stdout, "SNA-");
+		if (snap) fprintf(stdout, "SNA-");
 		else fprintf(stdout, "v1-");
 		if (!compressed) {
 			if (fread(main, sizeof(unsigned char), 49152, fp_in) != 49152) error(7);
 		}
 		else {
 			if (dcz80(&fp_in, &main[0], 49152) != 49152) error(7);
+		}
+		if (otek) {
+			// PC
+			launchmdr_full[launchmdr_full_jp] = noc_launchstk[noc_launchstk_jp] = fgetc(fp_in);
+			launchmdr_full[launchmdr_full_jp + 1] = noc_launchstk[noc_launchstk_jp + 1] = fgetc(fp_in);
+			// last out to 0x7ffd
+			launchmdr_full[launchmdr_full_out] = noc_launchigp[noc_launchigp_out] = fgetc(fp_in);
+			// TD-DOS
+			if (fgetc(fp_in) != 0) error(14);
+			int pagelayout[7];
+			for (i = 0; i < 7; i++) pagelayout[i] = 99;
+			pagelayout[0] = launchmdr_full[launchmdr_full_out] & 7;
+			//
+			if (pagelayout[0] == 0) {
+				pagelayout[0] = 32768;
+				pagelayout[1] = 49152;
+				pagelayout[2] = 65536;
+				pagelayout[3] = 81920;
+				pagelayout[4] = 98304;
+				pagelayout[5] = 114688;
+			}
+			else if (pagelayout[0] == 1) {
+				pagelayout[0] = 49152;
+				pagelayout[1] = 32768;
+				pagelayout[2] = 65536;
+				pagelayout[3] = 81920;
+				pagelayout[4] = 98304;
+				pagelayout[5] = 114688;
+			}
+			else if (pagelayout[0] == 2) {
+				pagelayout[0] = 16384;
+				pagelayout[1] = 32768;
+				pagelayout[2] = 49152;
+				pagelayout[3] = 65536;
+				pagelayout[4] = 81920;
+				pagelayout[5] = 98304;
+				pagelayout[6] = 114688;
+			}
+			else if (pagelayout[0] == 3) {
+				pagelayout[0] = 65536;
+				pagelayout[1] = 32768;
+				pagelayout[2] = 49152;
+				pagelayout[3] = 81920;
+				pagelayout[4] = 98304;
+				pagelayout[5] = 114688;
+			}
+			else if (pagelayout[0] == 4) {
+				pagelayout[0] = 81920;
+				pagelayout[1] = 32768;
+				pagelayout[2] = 49152;
+				pagelayout[3] = 65536;
+				pagelayout[4] = 98304;
+				pagelayout[5] = 114688;
+			}
+			else if (pagelayout[0] == 5) {
+				pagelayout[0] = 0;
+				pagelayout[1] = 32768;
+				pagelayout[2] = 49152;
+				pagelayout[3] = 65536;
+				pagelayout[4] = 81920;
+				pagelayout[5] = 98304;
+				pagelayout[6] = 114688;
+			}
+			else if (pagelayout[0] == 6) {
+				pagelayout[0] = 98304;
+				pagelayout[1] = 32768;
+				pagelayout[2] = 49152;
+				pagelayout[3] = 65536;
+				pagelayout[4] = 81920;
+				pagelayout[5] = 114688;
+			}
+			else {
+				pagelayout[0] = 114688;
+				pagelayout[1] = 32768;
+				pagelayout[2] = 49152;
+				pagelayout[3] = 65536;
+				pagelayout[4] = 81920;
+				pagelayout[5] = 98304;
+			}
+			if (pagelayout[0] != 32768) for (i = 0; i < 16384; i++) main[pagelayout[0] + i] = main[32768 + i]; //copy 0->?
+			for (i = 1; i < 7; i++) {
+				if (pagelayout[i] != 99) {
+					if (fread(&main[pagelayout[i]], sizeof(unsigned char), 16384, fp_in) != 16384) error(7);
+				}
+			}
 		}
 	}
 	// version 2 & 3
@@ -471,23 +588,6 @@ int main(int argc, char* argv[]) {
 		// for 128k snapshots the order is:
 		//		0 ROM, 1 ROM, 3 Page 0....10 page 7, 11 MF ROM.
 		// all pages are saved and there is no end marker
-		if (otek) {
-			bank[3] = 32768; //page 0
-			bank[4] = 49152; //page 1
-			bank[5] = 16384; //page 2
-			bank[6] = 65536; //page 3
-			bank[7] = 81920; //page 4
-			bank[8] = 0; //page 5
-			bank[9] = 98304; //page 6
-			bank[10] = 114688; //page 7
-			bankend = 8;
-		}
-		else {
-			bank[4] = 16384; //page 2
-			bank[5] = 32768; //page 0
-			bank[8] = 0; //page 5
-			bankend = 3;
-		}
 		do {
 			len.r[0] = fgetc(fp_in);
 			len.r[1] = fgetc(fp_in);
@@ -503,7 +603,7 @@ int main(int argc, char* argv[]) {
 	}
 	fclose(fp_in);
 	//
-	if (snap) {
+	if (snap && !otek) {
 		launchmdr_full[launchmdr_full_jp] = noc_launchstk[noc_launchstk_jp] = main[stackpos - 16384 - 2];
 		launchmdr_full[launchmdr_full_jp + 1] = noc_launchstk[noc_launchstk_jp + 1] = main[stackpos - 16384 - 1];
 	}
