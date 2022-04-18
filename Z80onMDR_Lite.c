@@ -37,7 +37,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#define VERSION_NUM "v1.7"
+#define VERSION_NUM "v2.0"
 #define PROGNAME "Z80onMDR_lite"
 #define B_GAP 128
 #define MAXLENGTH 256
@@ -57,6 +57,8 @@
 //v1.51 handle non-standard border colours
 //v1.6 128k SNA snapshots as well
 //v1.7 combined basic loader 128k & 48k so usr0 mode is always used even for 48k snapshots to help with compatibility, new screen decompression
+//v2.0 new 4 stage loader, includes restoration of AY registers and higher compatibility. Also new 2 stage in-screen loader to replace older
+//		in-screen loader
 typedef union {
 	unsigned long int rrrr; //byte number
 	unsigned char r[4]; //split number into 4 8bit bytes in case of overflow
@@ -107,166 +109,102 @@ int main(int argc, char* argv[]) {
 	// z80 or sna?
 	int snap = 0;
 	if (strcmp(&fz80[strlen(fz80) - 4], ".sna") == 0 || strcmp(&fz80[strlen(fz80) - 4], ".SNA") == 0) snap = 1;
-//	//128k basic loader
-//#define mdrbl128k_brd 16
-//#define mdrbl128k_pap 22
-//#define mdrbl128k_usr 142
-//#define mdrbl128k_len 188//211 (23)
-//	unsigned char mdrbl128k[] = { 0x00, 0x00, 0x8e, 0x00, 0xfd, 0x30, 0x0e, 0x00,													//(0)
-//									0x00, 0xff, 0x60, 0x00, 0x3a, 0xe7, 0xb0, 0x22, 0x30, 0x22, 0x3a, 0xda, 0xb0, 0x22, 0x30, 0x22,	//(8) clear 24831
-//									0x3a, 0xfb, 0x3a, 0xf9, 0xc0, 0x30, 0x0e, 0x00, 0x00, 0x9c, 0x5d, 0x00, 0x3a, 0xf1, 0x64, 0x3d,	//(24) randomize usr 23964
-//									0xbe, 0x30, 0x0e, 0x00, 0x00, 0xd6, 0x5c, 0x00, 0x3a, 0xef, 0x2a, 0x22, 0x6d, 0x22, 0x3b, 0x64,	//(40) let d=peek 23766
-//									0x3b, 0x22, 0x53, 0x22, 0xaf, 0x3a, 0xf9, 0xc0, 0x30, 0x0e, 0x00, 0x00, 0x00, 0x62, 0x00, 0x3a,	//(56) randomize usr 25088
-//									0xeb, 0x69, 0x3d, 0xb0, 0x22, 0x31, 0x22, 0xcc, 0xb0, 0x22, 0x35, 0x22, 0x3a, 0xef, 0x2a, 0x22,	//(72)
-//									0x6d, 0x22, 0x3b, 0x64, 0x3b, 0xc1, 0x69, 0xaf, 0x3a, 0xf9, 0xc0, 0x30, 0x0e, 0x00, 0x00, 0xb3,	//(88) randomize usr 32179
-//									0x7d, 0x00, 0x3a, 0xf3, 0x69, 0x3a, 0xef, 0x2a, 0x22, 0x6d, 0x22, 0x3b, 0x64, 0x3b, 0x22, 0x4d,	//(104)
-//									0x22, 0xaf, 0x3a, 0xef, 0x2a, 0x22, 0x6d, 0x22, 0x3b, 0x64, 0x3b, 0x22, 0x4c, 0x22, 0xaf, 0x3a,	//(120)
-//									0xf9, 0xc0, 0x30, 0x0e, 0x00, 0x00, 0x00, 0x40, 0x00, 0x0d, 0x27, 0x0f, 0x26, 0x00, 0xea, 0xf3,	//(136) randomize usr 16384
-//									0x2a, 0x3d, 0x5c, 0x23, 0x36, 0x13, 0x2b, 0x36, 0x03, 0x2b, 0x36, 0x1b, 0x2b, 0x36, 0x76, 0x2b,	//(152) usr 0 code
-//									0x36, 0x00, 0x2b, 0x36, 0x51, 0xf9, 0xfd, 0xcb, 0x01, 0xa6, 0x3e, 0x10, 0x01, 0xfd, 0x7f, 0xed,	//(168)
-//									0x79, 0xfb, 0xc9, 0x0d };																		//(184)
 	// basic loader
 #define mdrbln_brd 16
-#define mdrbln_pap 22
-#define mdrbln_to 59
-#define mdrbln_usr 119
-#define mdrbln_len 165
-	unsigned char mdrbln[] = {  0x00, 0x00, 0x77, 0x00, 0xfd, 0x30, 0x0e, 0x00,													//(0)
-								0x00, 0xff, 0x60, 0x00, 0x3a, 0xe7, 0xb0, 0x22, 0x30, 0x22, 0x3a, 0xda, 0xb0, 0x22, 0x30, 0x22,	//(8) clear 24831
-								0x3a, 0xfb, 0x3a, 0xf9, 0xc0, 0x30, 0x0e, 0x00, 0x00, 0x85, 0x5d, 0x00, 0x3a, 0xf1, 0x64, 0x3d,	//(24) randomize usr 23941
-								0xbe, 0x30, 0x0e, 0x00, 0x00, 0xd6, 0x5c, 0x00, 0x3a, 											//(40) let d=peek 23766
-								0xeb, 0x69, 0x3d, 0xb0, 0x22, 0x30, 0x22, 0xcc, 0xb0, 0x22, 0x35, 0x22, 0x3a, 0xef, 0x2a, 0x22,	//(49)
-								0x6d, 0x22, 0x3b, 0x64, 0x3b, 0xc1, 0x69, 0xaf, 0x3a, 0xf9, 0xc0, 0x30, 0x0e, 0x00, 0x00, 0xb3,	//(65) randomize usr 32179
-								0x7d, 0x00, 0x3a, 0xf3, 0x69, 0x3a, 0xef, 0x2a, 0x22, 0x6d, 0x22, 0x3b, 0x64, 0x3b, 0x22, 0x4d,	//(81)
-								0x22, 0xaf, 0x3a, 0xef, 0x2a, 0x22, 0x6d, 0x22, 0x3b, 0x64, 0x3b, 0x22, 0x4c, 0x22, 0xaf, 0x3a,	//(97)
-								0xf9, 0xc0, 0x30, 0x0e, 0x00, 0x00, 0x00, 0x40, 0x00, 0x0d, 0x27, 0x0f, 0x26, 0x00, 0xea, 0xf3,	//(113) randomize usr 16384
-								0x2a, 0x3d, 0x5c, 0x23, 0x36, 0x13, 0x2b, 0x36, 0x03, 0x2b, 0x36, 0x1b, 0x2b, 0x36, 0x76, 0x2b,	//(129) usr 0 code
-								0x36, 0x00, 0x2b, 0x36, 0x51, 0xf9, 0xfd, 0xcb, 0x01, 0xa6, 0x3e, 0x10, 0x01, 0xfd, 0x7f, 0xed,	//(145)
-								0x79, 0xfb, 0xc9, 0x0d };																		//(161)
-	// old screen based launcher
-#define launchmdr_full_rd 2 // rdata default 0x4072 for 16384, so +114
-#define launchmdr_full_cp 5 // compression pos
-#define launchmdr_full_cs 8
-#define launchmdr_full_lcf 63 // bdata default 0x4086 for 16384, so +134
-#define launchmdr_full_lcs 66 // last copy size
-#define launchmdr_full_out 74 // last out to 0x7ffd
-#define launchmdr_full_r 96
-#define launchmdr_full_im 100
-#define launchmdr_full_sp 102
-#define launchmdr_full_a 105
-#define launchmdr_full_ei 106
-#define launchmdr_full_jp 108
-#define launchmdr_full_bca 114
-#define launchmdr_full_dea 116
-#define launchmdr_full_hla 118
-#define launchmdr_full_ix 120
-#define launchmdr_full_iy 122
-#define launchmdr_full_afa 124
-#define launchmdr_full_hl 126
-#define launchmdr_full_de 128
-#define launchmdr_full_bc 130
-#define launchmdr_full_if 132
-#define launchmdr_full_len 134 // with 3bytes at end for final copy
-	unsigned char launchmdr_full[] = { 0xf3,0x31,0x72,0x40,0x21,0x00,0x00,0x11,0x00,0x5b,0x43,0x18,0x02,0xed,0xb0,0x7e,	//(0)
-									0x23,0x4f,0x0c,0x28,0x29,0xfe,0x20,0x38,0xf4,0xf5,0xe6,0xe0,0x07,0x07,0x07,0xfe,	//(16)
-									0x07,0x20,0x02,0x86,0x23,0xc6,0x02,0x4f,0x88,0x91,0x47,0xf1,0xe5,0xc5,0xe6,0x1f,	//(32)
-									0x47,0x4e,0x62,0x6b,0x37,0xed,0x42,0xc1,0xed,0xb0,0xe1,0x23,0x18,0xd1,				//(48)
-									0x21,0x86,0x40,0x01,0x03,0x00,0xed,0xb0,											//(62)
-									0x01,0xfd,0x7f,0x3e,0x30,0xed,0x79,													//(70)
-									0xd9,0xc1,0xd1,																		//(77)
-									0xe1,0xd9,0xdd,0xe1,0xfd,0xe1,0x08,0xf1,0x08,0xe1,0xd1,0xc1,0xf1,0xed,0x47,0x3e,	//(80)
-									0x02,0xed,0x4f,0xed,0x5e,0x31,0x4d,0xae,0x3e,0x00,0xf3,0xc3,0xb7,0xd9,0x00,0x00,	//(96)
-									0x00,0x00,0x00,0xff,0x00,0xff,0x1a,0xf8,0xf1,0xe3,0x3a,0x5c,0x8a,0x00,0x4c,0x10,	//(112)
-									0xcc,0x43,0x00,0x00,0x00,0x02,														//(128)
-	// space for 128bytes of delta overflow, starts at 3
-									0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-									0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-									0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-									0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-									0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-									0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-									0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
-									0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00 };
-	// 3 stage launcher, 1-printer buffer
-#define noc_launchprt_cp 5 // compression pos
-#define noc_launchprt_jp 20 // where to jump to
-#define noc_launchprt_len 67
-	unsigned char noc_launchprt[] = { 0xf3,0x31,0x43,0x5b,0x21,0x00,0x00,0x11,0x00,0x5c,0x43,0x18,0x02,0xed,0xb0,0x7e,	//(0)
-									  0x23,0x4f,0x0c,0xca,0xfe,0x5b,0xfe,0x20,0x38,0xf3,0xf5,0xe6,0xe0,0x07,0x07,0x07,	//(16)
-									  0xfe,0x07,0x20,0x02,0x86,0x23,0xc6,0x02,0x4f,0x88,0x91,0x47,0xf1,0xe5,0xc5,0xe6,	//(32)
-									  0x1f,0x47,0x4e,0x62,0x6b,0x37,0xed,0x42,0xc1,0xed,0xb0,0xe1,0x23,0x18,0xd0,		//(48)
-									  0x00,0x00,0x00,0x00};	//(63)
-	// 3 stage launcher, 2-gap
+#define mdrbln_to 51
+#define mdrbln_pap 135 // paper/ink
+#define mdrbln_fcpy 153 // final copy position
+#define mdrbln_cpyf 156 // copy from, normal 0x5b00
+#define mdrbln_cpyx 159 // copy times	
+#define mdrbln_fffd 195 // last fffd
+#define mdrbln_i 210
+#define mdrbln_im 214
+#define mdrbln_ts 216
+#define mdrbln_jp 219 // change if move launcher
+#define mdrbln_ay 221 // start of ay array
+#define mdrbln_bca 237
+#define mdrbln_dea 239
+#define mdrbln_hla 241
+#define mdrbln_ix 243
+#define mdrbln_iy 245
+#define mdrbln_afa 247
+#define mdrbln_len 250
+	unsigned char mdrbln[] = {	0x00,0x00,0x62,0x00,0xfd,0x30,0x0e,0x00,											//(0)
+								0x00,0x4f,0x61,0x00,0x3a,0xe7,0xb0,0x22,0x30,0x22,									//(8) clear 24911
+								0x3a,0xf9,0xc0,0x30,0x0e,0x00,0x00,0x70,0x5d,0x00,0x3a,0xf1,0x64,0x3d,				//(18) randomize usr 23920
+								0xbe,0x30,0x0e,0x00,0x00,0xd6,0x5c,0x00,0x3a,										//(32) let d=peek 23766
+								0xeb,0x69,0x3d,0xb0,0x22,0x30,0x22,0xcc,0xb0,0x22,0x35,0x22,0x3a,0xef,0x2a,0x22,	//(41)
+								0x6d,0x22,0x3b,0x64,0x3b,0xc1,0x69,0xaf,0x3a,0xf9,0xc0,0x30,0x0e,0x00,0x00,0xb3,	//(57) randomize usr 32179
+								0x7d,0x00,0x3a,0xf3,0x69,0x3a,0xef,0x2a,0x22,0x6d,0x22,0x3b,0x64,0x3b,0x22,0x4d,	//(73)
+								0x22,0xaf,0x3a,																		//(89)
+								0xf9,0xc0,0x30,0x0e,0x00,0x00,0x9c,0x5d,0x00,0x0d,									//(92) randomize usr 23964
+								// usr 0 code
+								0x27,0x0f,0x99,0x00,0xea,															//(102) line9999
+								0xf3,0x2a,0x3d,0x5c,0x23,0x36,0x13,0x2b,0x36,0x03,0x2b,0x36,0x1b,0x2b,0x36,0x76,	//(107) usr 0
+								0x2b,0x36,0x00,0x2b,0x36,0x51,0xf9,0xfd,0xcb,0x01,0xa6,0x3e,0x00,0x32,0x8d,0x5c,	//(123)
+								0xcd,0xaf,0x0d,0x3e,0x10,0x01,0xfd,0x7f,0xed,0x79,0xfb,0xc9,						//(139)
+								// stage 1
+								0xf3,0x21,0x39,0x30,0x11,0x00,0x5b,0x01,0x36,0x00,0xed,								//(151) 
+								0xb0,0x31,0xe2,0x5d,0xd9,0x01,0xfd,0xff,0xaf,0xe1,0xed,0x79,0x3c,0x06,0xbf,0xed,	//(162)
+								0x69,0x06,0xff,0xed,0x79,0x3c,0x06,0xbf,0xed,0x61,0xfe,0x10,0x06,0xff,0x20,0xe9,	//(178)
+								0x3e,0x00,0xed,0x79,0xc1,0xd1,0xe1,0xd9,0xdd,0xe1,0xfd,0xe1,0x08,0xf1,0x08,0x3e,	//(194)
+								0x00,0xed,0x47,0xed,0x5e,0x31,0x36,0x5b,0xc3,0x02,0x5b,0x00,0x00,0x00,0x00,0x00,	//(210)
+								0x00,0x00,0xff,0x00,0x00,0x00,0x00,0x00,0x00,0xbf,0x00,0x00,0x00,0x00,0x00,0x00,	//(226)
+								0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x0d };											//(242)
+	// alternate loader stage 2,3 & 4 in screen
+#define launch_scr_start 2
+#define launch_scr_lcf 50+5	// bdata
+#define launch_scr_lcs 53+5
+#define launch_scr_out 60+5
+#define launch_scr_de 64+5
+#define launch_scr_bc 67+5
+#define launch_scr_hl 70+5
+#define launch_scr_r 73+5
+#define launch_scr_sp 78+5
+#define launch_scr_ei 80+5
+#define launch_scr_jp 82+5
+#define launch_scr_af 88+5
+#define launch_scr_delta 90+5
+#define launch_scr_len 93+5 // for delta=3
+	unsigned char launch_scr[] = {	0x11,0x00,0x5b,0x18,0x02,0xed,0xb0,0x7e,0x23,0x4f,0x0c,0x28,0x29,0xfe,0x20,0x38,	//(0)
+									0xf4,0xf5,0xe6,0xe0,0x07,0x07,0x07,0xfe,0x07,0x20,0x02,0x86,0x23,0xc6,0x02,0x4f,	//(16)
+									0x88,0x91,0x47,0xf1,0xe5,0xc5,0xe6,0x1f,0x47,0x4e,0x62,0x6b,0x37,0xed,0x42,0xc1,	//(32)
+									0xed,0xb0,0xe1,0x23,0x18,0xd1,0x21,0x5f,0x40,0x0e,0x03,0xed,0xb0,0x01,0xfd,0x7f,	//(48)
+									0x3e,0x30,0xed,0x79,0x11,0x00,0x00,0x01,0x00,0x00,0x21,0x00,0x00,0x3e,0x02,0xed,	//(64)
+									0x4f,0xf1,0x31,0x00,0x00,0xf3,0xc3,0xb7,0xd9,0x00,0x00,0x00,0x00,0x00,0x00 };		//(80)
+	// stage 2 - printer buffer
+#define noc_launchprt_jp 7 // where to jump to
+#define noc_launchprt_len 54
+	unsigned char noc_launchprt[] = {	0xed,0xb0,0x7e,0x23,0x4f,0x0c,0xca,0x36,0x5b,0xfe,0x20,0x38,0xf3,0xf5,0xe6,0xe0,	//(0)
+										0x07,0x07,0x07,0xfe,0x07,0x20,0x02,0x86,0x23,0xc6,0x02,0x4f,0x88,0x91,0x47,0xf1,	//(16)
+										0xe5,0xc5,0xe6,0x1f,0x47,0x4e,0x62,0x6b,0x37,0xed,0x42,0xc1,0xed,0xb0,0xe1,0x23,	//(32)
+										0x18,0xd0,0x00,0x00,0x00,0x00 };													//(48)
+	// stage 3 - gap part
 	int noc_launchigp_pos = 0; // memory position for this routine
 #define noc_launchigp_bdata 1 // bdata start, pos+16
 #define noc_launchigp_lcs 4 // last copy size=delta=3
-#define noc_launchigp_out 17 // last out to 0x7ffd 0x30 is bank off
-#define noc_launchigp_bca 22
-#define noc_launchigp_dea 25
-#define noc_launchigp_hla 28
-#define noc_launchigp_ix 33
-#define noc_launchigp_iy 37
-#define noc_launchigp_de 40
-#define noc_launchigp_clr 44 // amount to clear 121
-#define noc_launchigp_chr 43 // char to clear
-#define noc_launchigp_rd 46 // stack rdata  (stack-8)
-#define noc_launchigp_jp 49 // jump into stack-32
-#define noc_launchigp_begin 51 // start of bdata 
-#define noc_launchigp_len 121 // this is also the restore number 51+67+3 (delta)
-	unsigned char noc_launchigp[] = { 0x21,0x3f,0x5b,																	//(0) bdata [1]
-										0x0e,0x03,																		//(3) lcs [4]
-										0xed,0xb0,0x16,0x5b,0x0e,0x43,0xed,0xb0,										//(5) 
-										0x01,0xfd,0x7f,0x3e,0x30,														//(13) ld a,0x30 [17]
-										0xed,0x79,0xd9,0x01,0x00,0x00,													//(18) bc' [22]
-										0x11,0x00,0x00,																	//(24) de' [25]
-										0x21,0x00,0x00,																	//(27) hl' [28]
-										0xd9,0xdd,0x21,0x00,0x00,														//(30) ix [33]
-										0xfd,0x21,0x00,0x00,															//(35) iy [37]
-										0x11,0x00,0x00,																	//(39) de [40]
-										0x01,0x00,0x00,																	//(42) clr [44],chr [43]
-										0x31,0x8e,0x5b,																	//(45) rd [46]
-										0xc3,0x76,0x5b };																//(48) jp [49]
-	// 3 stage launcher - gap adjustments
-	int adjgap[] = { 3,  6, 9, 13, 17, 18, 21, 24, 27, 28, 30, 32, 35 };
-	//              rd cc de  iy  ix  exx hl' de' bc' exx out  a  7ffd
-	//
-	// 3 stage launcher, 3-stack
-	int noc_launchstk_pos = 0; // memory position stack - 32
-#define noc_launchstk_bc 8
-#define noc_launchstk_hl 11
-#define noc_launchstk_r 17 // r - reduce by 4 instead of 6
-#define noc_launchstk_im 21 // interrupt
-#define noc_launchstk_a 23
-#define noc_launchstk_ei 24
-#define noc_launchstk_jp 26
-#define noc_launchstk_afa 28
-#define noc_launchstk_if 30
-#define noc_launchstk_len 32 // max 67, min 32
-	unsigned char noc_launchstk[] = { 0x2b,0x71,0x10,0xfc,0x08,0xf1,0x08,												//(0)
-										0x01,0x00,0x00,																	//(7) bc [8]
-										0x21,0x00,0x00,																	//(10) hl [11]
-										0xf1,0xed,0x47,																	//(13)
-										0x3e,0x02,0xed,0x4f,															//(16) r [17]
-										0xed,0x5e,																		//(20) im [21]
-										0x3e,0x00,																		//(22) a [23]
-										0xf3,																			//(24) ei
-										0xc3,0xb7,0xd9,																	//(25) pc [26]
-										0x00,0x00,																		//(28) af'
-										0x00,0x00 };																	//(30) if 
+#define noc_launchigp_de 14
+#define noc_launchigp_clr 18 // amount to clear 82
+#define noc_launchigp_chr 17 // char to clear
+#define noc_launchigp_rd 20 // stack rdata = stack-2
+#define noc_launchigp_jp 23 // jump into = stack-28
+#define noc_launchigp_begin 25 // beginning of bdata
+#define noc_launchigp_len 82 // 25 + 3 + 54 = 82bytes for delta=3
+	unsigned char noc_launchigp[] = {	0x21,0x4f,0x5b,0x0e,0x03,0xed,0xb0,0x16,0x5b,0x0e,								//(0)
+										0x36,0xed,0xb0,0x11,0x00,0x00,0x01,0x00,0x52,0x31,0x64,0x5b,0xc3,0x4f,0x5b };	//(10)
+	// stage 4 - stack part
+	int noc_launchstk_pos = 0; // memory position stack - noc_launchstk_len
+#define noc_launchstk_out 8
+#define noc_launchstk_bc 12
+#define noc_launchstk_hl 15
+#define noc_launchstk_r 18 // r
+#define noc_launchstk_ei 22
+#define noc_launchstk_jp 24
+#define noc_launchstk_af 26
+#define noc_launchstk_len 28
+	unsigned char noc_launchstk[] = { 0x2b,0x71,0x10,0xfc,0x01,0xfd,0x7f,0x3e,0x30,0xed,0x79,0x01,0x00,0x00,0x21,0x00,	//(0)
+										0x00,0x3e,0x02,0xed,0x4f,0xf1,0xf3,0xc3,0xb7,0xd9,0x00,0x00 };			//(16)
 	//compressed screen loader
-//#define scrload_len 109
-//	unsigned char scrload[] = { 0x21, 0x6d, 0x62, 0x11, 0x00, 0x58, 0x18, 0x11, 0x7e, 0x12, 0x14, 0x7a, 0xfe, 0x59, 0xd4, 0x5b,	//0
-//								0x62, 0xe6, 0x07, 0xcc, 0x64, 0x62, 0x23, 0x10, 0xef, 0x7e, 0x23, 0x47, 0x04, 0xc8, 0xfe, 0x20,	//16
-//								0x38, 0xe6, 0x4f, 0xe6, 0xe0, 0x07, 0x07, 0x07, 0xfe, 0x07, 0x20, 0x02, 0x86, 0x23, 0xc6, 0x02,	//32
-//								0x47, 0xe5, 0x79, 0xe6, 0x1f, 0xc6, 0x40, 0x6e, 0x67, 0x7e, 0x12, 0x14, 0x7a, 0xfe, 0x59, 0xd4,	//48
-//								0x5b, 0x62, 0xe6, 0x07, 0xcc, 0x64, 0x62, 0xeb, 0x14, 0x7a, 0xfe, 0x59, 0xd4, 0x5b, 0x62, 0xe6,	//64
-//								0x07, 0xcc, 0x64, 0x62, 0xeb, 0x10, 0xe2, 0xe1, 0x23, 0x18, 0xbe, 0x3d, 0x07, 0x07, 0x07, 0xee,	//80
-//								0x82, 0x57, 0x3c, 0xc9, 0xaa, 0x1f, 0x1f, 0x1f, 0xc6, 0x4f, 0x57, 0x13, 0xc9 };	//96 (109)
-//#define scrload_data 1   // 0x7e0b - +88bytes
-//#define scrload_ast 3	// alternate start
-//#define scrload_call1 9 // 0x7def - +60bytes
-//#define scrload_call2 47 // same as call1
-#define scrload_call3 51 // 0x7df1 - +62bytes
 #define scrload_len 88
 	unsigned char scrload[] = { 0x21,0x0b,0x7e,0x11,0x00,0x58,0x18,0x06,0xcd,0xef,0x7d,0x23,0x10,0xfa,0x7e,0x23,	//(0)
 								0x47,0x04,0xc8,0xfe,0x20,0x38,0xf1,0x4f,0xe6,0xe0,0x07,0x07,0x07,0xfe,0x07,0x20,	//(16)
@@ -276,11 +214,11 @@ int main(int argc, char* argv[]) {
 								0x1f,0x1f,0x1f,0xc6,0x4f,0x57,0x13,0xc9 };											//(80)
 	//unpacker for 128k pages
 #define unpack_len 77
-	unsigned char unpack[] = { 0xf3, 0x3a, 0xff, 0x7d, 0x01, 0xfd, 0x7f, 0xed, 0x79, 0x21, 0x00, 0x7e, 0x11, 0x00, 0xc0, 0x43,
-								0x18, 0x02, 0xed, 0xb0, 0x7e, 0x23, 0x4f, 0x0c, 0x28, 0x29, 0xfe, 0x20, 0x38, 0xf4, 0xf5, 0xe6,
-								0xe0, 0x07, 0x07, 0x07, 0xfe, 0x07, 0x20, 0x02, 0x86, 0x23, 0xc6, 0x02, 0x4f, 0x88, 0x91, 0x47,
-								0xf1, 0xe5, 0xc5, 0xe6, 0x1f, 0x47, 0x4e, 0x62, 0x6b, 0x37, 0xed, 0x42, 0xc1, 0xed, 0xb0, 0xe1,
-								0x23, 0x18, 0xd1, 0x3e, 0x10, 0x01, 0xfd, 0x7f, 0xed, 0x79, 0xfb, 0xc9, 0x11 };
+	unsigned char unpack[] = {	0xf3,0x3a,0xff,0x7d,0x01,0xfd,0x7f,0xed,0x79,0x21,0x00,0x7e,0x11,0x00,0xc0,0x43,
+								0x18,0x02,0xed,0xb0,0x7e,0x23,0x4f,0x0c,0x28,0x29,0xfe,0x20,0x38,0xf4,0xf5,0xe6,
+								0xe0,0x07,0x07,0x07,0xfe,0x07,0x20,0x02,0x86,0x23,0xc6,0x02,0x4f,0x88,0x91,0x47,
+								0xf1,0xe5,0xc5,0xe6,0x1f,0x47,0x4e,0x62,0x6b,0x37,0xed,0x42,0xc1,0xed,0xb0,0xe1,
+								0x23,0x18,0xd1,0x3e,0x10,0x01,0xfd,0x7f,0xed,0x79,0xfb,0xc9,0x11 };
 	//
 	int otek = 0, stackpos = 0;
 	unsigned char compressed = 0;
@@ -291,150 +229,152 @@ int main(int argc, char* argv[]) {
 		if (filesize < 49179) error(14);
 		if (filesize >= 131103) otek = 1; // 128k snapshot
 		//	$00  I	Interrupt register
-		launchmdr_full[launchmdr_full_if + 1] = noc_launchstk[noc_launchstk_if + 1] = fgetc(fp_in);
+		mdrbln[mdrbln_i] = fgetc(fp_in);
 		//	$01  HL'
-		launchmdr_full[launchmdr_full_hla] = noc_launchigp[noc_launchigp_hla] = fgetc(fp_in);
-		launchmdr_full[launchmdr_full_hla + 1] = noc_launchigp[noc_launchigp_hla + 1] = fgetc(fp_in);
+		mdrbln[mdrbln_hla] = fgetc(fp_in);
+		mdrbln[mdrbln_hla + 1] = fgetc(fp_in);
 		//	$03  DE'
-		launchmdr_full[launchmdr_full_dea] = noc_launchigp[noc_launchigp_dea] = fgetc(fp_in);
-		launchmdr_full[launchmdr_full_dea + 1] = noc_launchigp[noc_launchigp_dea + 1] = fgetc(fp_in);
+		mdrbln[mdrbln_dea] = fgetc(fp_in);
+		mdrbln[mdrbln_dea + 1] = fgetc(fp_in);
 		// check this is a SNA snapshot
-		if (launchmdr_full[launchmdr_full_if + 1] == 'M' && launchmdr_full[launchmdr_full_hla] == 'V' &&
-			launchmdr_full[launchmdr_full_hla + 1] == ' ' && launchmdr_full[launchmdr_full_dea] == '-') error(14);
-		if (launchmdr_full[launchmdr_full_if + 1] == 'Z' && launchmdr_full[launchmdr_full_hla] == 'X' &&
-			launchmdr_full[launchmdr_full_hla + 1] == '8' && launchmdr_full[launchmdr_full_dea] == '2') error(14);
+		if (mdrbln[mdrbln_i] == 'M' && mdrbln[mdrbln_hla] == 'V' &&
+			mdrbln[mdrbln_hla + 1] == ' ' && mdrbln[mdrbln_dea] == '-') error(14);
+		if (mdrbln[mdrbln_i] == 'Z' && mdrbln[mdrbln_hla] == 'X' &&
+			mdrbln[mdrbln_hla + 1] == '8' && mdrbln[mdrbln_dea] == '2') error(14);
 		//	$05  BC'
-		launchmdr_full[launchmdr_full_bca] = noc_launchigp[noc_launchigp_bca] = fgetc(fp_in);
-		launchmdr_full[launchmdr_full_bca + 1] = noc_launchigp[noc_launchigp_bca + 1] = fgetc(fp_in);
+		mdrbln[mdrbln_bca] = fgetc(fp_in);
+		mdrbln[mdrbln_bca + 1] = fgetc(fp_in);
 		//	$07  F'
-		launchmdr_full[launchmdr_full_afa] = noc_launchstk[noc_launchstk_afa] = fgetc(fp_in);
+		 mdrbln[mdrbln_afa] = fgetc(fp_in);
 		//	$08  A'
-		launchmdr_full[launchmdr_full_afa + 1] = noc_launchstk[noc_launchstk_afa + 1] = fgetc(fp_in);
+		mdrbln[mdrbln_afa + 1] = fgetc(fp_in);
 		//	$09  HL	
-		launchmdr_full[launchmdr_full_hl] = noc_launchstk[noc_launchstk_hl] = fgetc(fp_in);
-		launchmdr_full[launchmdr_full_hl + 1] = noc_launchstk[noc_launchstk_hl + 1] = fgetc(fp_in);
+		launch_scr[launch_scr_hl] = noc_launchstk[noc_launchstk_hl] = fgetc(fp_in);
+		launch_scr[launch_scr_hl + 1] = noc_launchstk[noc_launchstk_hl + 1] = fgetc(fp_in);
 		//	$0B  DE
-		launchmdr_full[launchmdr_full_de] = noc_launchigp[noc_launchigp_de] = fgetc(fp_in);
-		launchmdr_full[launchmdr_full_de + 1] = noc_launchigp[noc_launchigp_de + 1] = fgetc(fp_in);
+		launch_scr[launch_scr_de] = noc_launchigp[noc_launchigp_de] = fgetc(fp_in);
+		launch_scr[launch_scr_de + 1] = noc_launchigp[noc_launchigp_de + 1] = fgetc(fp_in);
 		//	$0D  BC
-		launchmdr_full[launchmdr_full_bc] = noc_launchstk[noc_launchstk_bc] = fgetc(fp_in);
-		launchmdr_full[launchmdr_full_bc + 1] = noc_launchstk[noc_launchstk_bc + 1] = fgetc(fp_in);
+		launch_scr[launch_scr_bc] = noc_launchstk[noc_launchstk_bc] = fgetc(fp_in);
+		launch_scr[launch_scr_bc + 1] = noc_launchstk[noc_launchstk_bc + 1] = fgetc(fp_in);
 		//	$0F  IY
-		launchmdr_full[launchmdr_full_iy] = noc_launchigp[noc_launchigp_iy] = fgetc(fp_in);
-		launchmdr_full[launchmdr_full_iy + 1] = noc_launchigp[noc_launchigp_iy + 1] = fgetc(fp_in);
+		mdrbln[mdrbln_iy] = fgetc(fp_in);
+		mdrbln[mdrbln_iy + 1] = fgetc(fp_in);
 		//	$11  IX
-		launchmdr_full[launchmdr_full_ix] = noc_launchigp[noc_launchigp_ix] = fgetc(fp_in);
-		launchmdr_full[launchmdr_full_ix + 1] = noc_launchigp[noc_launchigp_ix + 1] = fgetc(fp_in);
+		mdrbln[mdrbln_ix] = fgetc(fp_in);
+		mdrbln[mdrbln_ix + 1] = fgetc(fp_in);
 		//	$13  0 for DI otherwise EI
 		c = fgetc(fp_in);
-		if (c == 0) launchmdr_full[launchmdr_full_ei] = noc_launchstk[noc_launchstk_ei] = 0xf3;	//di
-		else launchmdr_full[launchmdr_full_ei] = noc_launchstk[noc_launchstk_ei] = 0xfb;	//ei
+		if (c == 0) launch_scr[launch_scr_ei] = noc_launchstk[noc_launchstk_ei] = 0xf3;	//di
+		else launch_scr[launch_scr_ei] = noc_launchstk[noc_launchstk_ei] = 0xfb;	//ei
 		//	$14  R
-		launchmdr_full[launchmdr_full_r] = launchmdr_full[launchmdr_full_r] = fgetc(fp_in);
+		launch_scr[launch_scr_r] = noc_launchstk[noc_launchstk_r] = fgetc(fp_in);
 		//	$15  F
-		launchmdr_full[launchmdr_full_if] = noc_launchstk[noc_launchstk_if] = fgetc(fp_in);
+		launch_scr[launch_scr_af] = noc_launchstk[noc_launchstk_af] = fgetc(fp_in);
 		//	$16  A
-		launchmdr_full[launchmdr_full_a] = noc_launchstk[noc_launchstk_a] = fgetc(fp_in);
+		launch_scr[launch_scr_af + 1] = noc_launchstk[noc_launchstk_af + 1] = fgetc(fp_in);
 		//	$17  SP
-		launchmdr_full[launchmdr_full_sp] = fgetc(fp_in);
-		launchmdr_full[launchmdr_full_sp + 1] = fgetc(fp_in);
-		if(otek) stackpos = launchmdr_full[launchmdr_full_sp + 1] * 256 + launchmdr_full[launchmdr_full_sp];
-		else stackpos = launchmdr_full[launchmdr_full_sp + 1] * 256 + launchmdr_full[launchmdr_full_sp] + 2;
+		stackpos = fgetc(fp_in);
+		stackpos = stackpos + fgetc(fp_in) * 256;
+		if (!otek)stackpos += 2;
 		if (stackpos == 0) stackpos = 65536;
 		noc_launchstk_pos = stackpos - noc_launchstk_len; // pos of stack code
-		len.rrrr = noc_launchstk_pos + noc_launchstk_afa;
-		noc_launchigp[noc_launchigp_rd] = len.r[0];
-		noc_launchigp[noc_launchigp_rd + 1] = len.r[1]; // start of stack within stack
+		len.rrrr = noc_launchstk_pos + noc_launchstk_af;
+		launch_scr[launch_scr_sp] = noc_launchigp[noc_launchigp_rd] = len.r[0];
+		launch_scr[launch_scr_sp + 1] = noc_launchigp[noc_launchigp_rd + 1] = len.r[1]; // start of stack within stack
 		// $19  Interrupt mode IM(0, 1 or 2)
 		c = fgetc(fp_in) & 3;
-		if (c == 0) launchmdr_full[launchmdr_full_im] = noc_launchstk[noc_launchstk_im] = 0x46; //im 0
-		else if (c == 1) launchmdr_full[launchmdr_full_im] = noc_launchstk[noc_launchstk_im] = 0x56; //im 1
-		else launchmdr_full[launchmdr_full_im] = noc_launchstk[noc_launchstk_im] = 0x5e; //im 2
+		if (c == 0) mdrbln[mdrbln_im] = 0x46; //im 0
+		else if (c == 1) mdrbln[mdrbln_im] = 0x56; //im 1
+		else mdrbln[mdrbln_im] = 0x5e; //im 2
 		//	$1A  Border colour
-		mdrbln[mdrbln_brd] = mdrbln[mdrbln_pap] = (fgetc(fp_in) & 7) + 0x30;
+		c = fgetc(fp_in) & 7;
+		mdrbln[mdrbln_brd] = c + 0x30;
+		mdrbln[mdrbln_pap] = (c << 3) + c;
 	}
 	else {
 		//read in z80 starting with header
 		//	0       1       A register
-		launchmdr_full[launchmdr_full_a] = noc_launchstk[noc_launchstk_a] = fgetc(fp_in);
+		launch_scr[launch_scr_af+1] = noc_launchstk[noc_launchstk_af + 1] = fgetc(fp_in);
 		//	1       1       F register
-		launchmdr_full[launchmdr_full_if] = noc_launchstk[noc_launchstk_if] = fgetc(fp_in);
+		launch_scr[launch_scr_af] = noc_launchstk[noc_launchstk_af] = fgetc(fp_in);
 		//	2       2       BC register pair(LSB, i.e.C, first)
-		launchmdr_full[launchmdr_full_bc] = noc_launchstk[noc_launchstk_bc] = fgetc(fp_in);
-		launchmdr_full[launchmdr_full_bc + 1] = noc_launchstk[noc_launchstk_bc + 1] = fgetc(fp_in);
+		launch_scr[launch_scr_bc] = noc_launchstk[noc_launchstk_bc] = fgetc(fp_in);
+		launch_scr[launch_scr_bc + 1] = noc_launchstk[noc_launchstk_bc + 1] = fgetc(fp_in);
 		//	4       2       HL register pair
-		launchmdr_full[launchmdr_full_hl] = noc_launchstk[noc_launchstk_hl] = fgetc(fp_in);
-		launchmdr_full[launchmdr_full_hl + 1] = noc_launchstk[noc_launchstk_hl + 1] = fgetc(fp_in);
+		launch_scr[launch_scr_hl] = noc_launchstk[noc_launchstk_hl] = fgetc(fp_in);
+		launch_scr[launch_scr_hl + 1] = noc_launchstk[noc_launchstk_hl + 1] = fgetc(fp_in);
 		//	6       2       Program counter (if zero then version 2 or 3 snapshot)
-		launchmdr_full[launchmdr_full_jp] = noc_launchstk[noc_launchstk_jp] = fgetc(fp_in);
-		launchmdr_full[launchmdr_full_jp + 1] = noc_launchstk[noc_launchstk_jp + 1] = fgetc(fp_in);
+		launch_scr[launch_scr_jp] = noc_launchstk[noc_launchstk_jp] = fgetc(fp_in);
+		launch_scr[launch_scr_jp + 1] = noc_launchstk[noc_launchstk_jp + 1] = fgetc(fp_in);
 		//	8       2       Stack pointer
-		launchmdr_full[launchmdr_full_sp] = fgetc(fp_in);
-		launchmdr_full[launchmdr_full_sp + 1] = fgetc(fp_in);
-		stackpos = launchmdr_full[launchmdr_full_sp + 1] * 256 + launchmdr_full[launchmdr_full_sp];
+		stackpos = fgetc(fp_in);
+		stackpos = stackpos + fgetc(fp_in) * 256;
 		if (stackpos == 0) stackpos = 65536;
 		noc_launchstk_pos = stackpos - noc_launchstk_len; // pos of stack code
-		len.rrrr = noc_launchstk_pos + noc_launchstk_afa;
-		noc_launchigp[noc_launchigp_rd] = len.r[0];
-		noc_launchigp[noc_launchigp_rd + 1] = len.r[1]; // start of stack within stack
+		len.rrrr = noc_launchstk_pos + noc_launchstk_af;
+		launch_scr[launch_scr_sp] = noc_launchigp[noc_launchigp_rd] = len.r[0];
+		launch_scr[launch_scr_sp + 1] = noc_launchigp[noc_launchigp_rd + 1] = len.r[1]; // start of stack within stack
 		//	10      1       Interrupt register
-		launchmdr_full[launchmdr_full_if + 1] = noc_launchstk[noc_launchstk_if + 1] = fgetc(fp_in);
+		mdrbln[mdrbln_i] = fgetc(fp_in);
 		//	11      1       Refresh register (Bit 7 is not significant!)
-		launchmdr_full[launchmdr_full_r] = fgetc(fp_in) - 6; // r, reduce by 6 so correct on launch
-		noc_launchstk[noc_launchstk_r] = launchmdr_full[launchmdr_full_r] + 1; // 5 for 3 stage launcher
+		c = fgetc(fp_in);
+		launch_scr[launch_scr_r] = c - 4; // r, reduce by 4 so correct on launch
+		noc_launchstk[noc_launchstk_r] = c - 3; // 3 for 4 stage launcher
 		//	12      1       Bit 0: Bit 7 of r register; Bit 1-3: Border colour; Bit 4=1: SamROM; Bit 5=1:v1 Compressed; Bit 6-7: N/A
 		c = fgetc(fp_in);
 		compressed = (c & 32) >> 5;	// 1 compressed, 0 not
 		if (c & 1 || c > 127) {
-			launchmdr_full[launchmdr_full_r] = launchmdr_full[launchmdr_full_r] | 128;	// r high bit set
+			launch_scr[launch_scr_r] = launch_scr[launch_scr_r] | 128;	// r high bit set
 			noc_launchstk[noc_launchstk_r] = noc_launchstk[noc_launchstk_r] | 128;	// r high bit set
 		}
 		else {
-			launchmdr_full[launchmdr_full_r] = launchmdr_full[launchmdr_full_r] & 127;	//r high bit reset
+			launch_scr[launch_scr_r] = launch_scr[launch_scr_r] & 127;	//r high bit reset
 			noc_launchstk[noc_launchstk_r] = noc_launchstk[noc_launchstk_r] & 127;	//r high bit reset
 		}
-		mdrbln[mdrbln_brd] = mdrbln[mdrbln_pap] = ((c & 14) >> 1) + 0x30; //border/paper col
+		mdrbln[mdrbln_brd] = ((c & 14) >> 1) + 0x30; //border
+		mdrbln[mdrbln_pap] = (((c & 14) >> 1) << 3) + ((c & 14) >> 1); //paper/ink
 		//	13      2       DE register pair
-		launchmdr_full[launchmdr_full_de] = noc_launchigp[noc_launchigp_de] = fgetc(fp_in);
-		launchmdr_full[launchmdr_full_de + 1] = noc_launchigp[noc_launchigp_de + 1] = fgetc(fp_in);
+		launch_scr[launch_scr_de] = noc_launchigp[noc_launchigp_de] = fgetc(fp_in);
+		launch_scr[launch_scr_de + 1] = noc_launchigp[noc_launchigp_de + 1] = fgetc(fp_in);
 		//	15      2       BC' register pair
-		launchmdr_full[launchmdr_full_bca] = noc_launchigp[noc_launchigp_bca] = fgetc(fp_in);
-		launchmdr_full[launchmdr_full_bca + 1] = noc_launchigp[noc_launchigp_bca + 1] = fgetc(fp_in);
+		mdrbln[mdrbln_bca] = fgetc(fp_in);
+		mdrbln[mdrbln_bca + 1] = fgetc(fp_in);
 		//	17      2       DE' register pair
-		launchmdr_full[launchmdr_full_dea] = noc_launchigp[noc_launchigp_dea] = fgetc(fp_in);
-		launchmdr_full[launchmdr_full_dea + 1] = noc_launchigp[noc_launchigp_dea + 1] = fgetc(fp_in);
+		mdrbln[mdrbln_dea] = fgetc(fp_in);
+		mdrbln[mdrbln_dea + 1] = fgetc(fp_in);
 		//	19      2       HL' register pair
-		launchmdr_full[launchmdr_full_hla] = noc_launchigp[noc_launchigp_hla] = fgetc(fp_in);
-		launchmdr_full[launchmdr_full_hla + 1] = noc_launchigp[noc_launchigp_hla + 1] = fgetc(fp_in);
+		mdrbln[mdrbln_hla] = fgetc(fp_in);
+		mdrbln[mdrbln_hla + 1] = fgetc(fp_in);
 		//	21      1       A' register
-		launchmdr_full[launchmdr_full_afa + 1] = noc_launchstk[noc_launchstk_afa + 1] = fgetc(fp_in);
+		mdrbln[mdrbln_afa + 1] = fgetc(fp_in);
 		//	22      1       F' register
-		launchmdr_full[launchmdr_full_afa] = noc_launchstk[noc_launchstk_afa] = fgetc(fp_in);
+		mdrbln[mdrbln_afa] = fgetc(fp_in);
 		//	23      2       IY register (Again LSB first)
-		launchmdr_full[launchmdr_full_iy] = noc_launchigp[noc_launchigp_iy] = fgetc(fp_in);
-		launchmdr_full[launchmdr_full_iy + 1] = noc_launchigp[noc_launchigp_iy + 1] = fgetc(fp_in);
+		mdrbln[mdrbln_iy] = fgetc(fp_in);
+		mdrbln[mdrbln_iy + 1] = fgetc(fp_in);
 		//	25      2       IX register
-		launchmdr_full[launchmdr_full_ix] = noc_launchigp[noc_launchigp_ix] = fgetc(fp_in);
-		launchmdr_full[launchmdr_full_ix + 1] = noc_launchigp[noc_launchigp_ix + 1] = fgetc(fp_in);
+		mdrbln[mdrbln_ix] = fgetc(fp_in);
+		mdrbln[mdrbln_ix + 1] = fgetc(fp_in);
 		//	27      1       Interrupt flipflop, 0 = DI, otherwise EI
 		c = fgetc(fp_in);
-		if (c == 0) launchmdr_full[launchmdr_full_ei] = noc_launchstk[noc_launchstk_ei] = 0xf3;	//di
-		else launchmdr_full[launchmdr_full_ei] = noc_launchstk[noc_launchstk_ei] = 0xfb;	//ei
+		if (c == 0) launch_scr[launch_scr_ei] = noc_launchstk[noc_launchstk_ei] = 0xf3;	//di
+		else launch_scr[launch_scr_ei] = noc_launchstk[noc_launchstk_ei] = 0xfb;	//ei
 		//	28      1       IFF2 [IGNORED]
 		c = fgetc(fp_in);
 		//	29      1       Bit 0-1: IM(0, 1 or 2); Bit 2-7: N/A
 		c = fgetc(fp_in) & 3;
-		if (c == 0) launchmdr_full[launchmdr_full_im] = noc_launchstk[noc_launchstk_im] = 0x46; //im 0
-		else if (c == 1) launchmdr_full[launchmdr_full_im] = noc_launchstk[noc_launchstk_im] = 0x56; //im 1
-		else launchmdr_full[launchmdr_full_im] = noc_launchstk[noc_launchstk_im] = 0x5e; //im 2
+		if (c == 0) mdrbln[mdrbln_im] = 0x46; //im 0
+		else if (c == 1) mdrbln[mdrbln_im] = 0x56; //im 1
+		else mdrbln[mdrbln_im] = 0x5e; //im 2
 		// version 2 & 3 only
-		if (launchmdr_full[launchmdr_full_jp] == 0 && launchmdr_full[launchmdr_full_jp + 1] == 0) {
+		if (launch_scr[launch_scr_jp] == 0 && launch_scr[launch_scr_jp + 1] == 0) {
 			//  30      2       Length of additional header block
 			addlen.r[0] = fgetc(fp_in);
 			addlen.r[1] = fgetc(fp_in);
 			//  32      2       Program counter
-			launchmdr_full[launchmdr_full_jp] = noc_launchstk[noc_launchstk_jp] = fgetc(fp_in);
-			launchmdr_full[launchmdr_full_jp + 1] = noc_launchstk[noc_launchstk_jp + 1] = fgetc(fp_in);
+			launch_scr[launch_scr_jp] = noc_launchstk[noc_launchstk_jp] = fgetc(fp_in);
+			launch_scr[launch_scr_jp + 1] = noc_launchstk[noc_launchstk_jp + 1] = fgetc(fp_in);
 			//	34      1       Hardware mode standard 0-6 (2 is SamRAM), 7 +3, 8 +3 & 10 not supported, 11 Didatik, 12 +2, 13 +2A
 			c = fgetc(fp_in);
 			if (c == 2 || c == 10 || c == 11 || c > 13) error(4);
@@ -442,12 +382,14 @@ int main(int argc, char* argv[]) {
 			else if (c > 3) otek = 1;
 			//	35      1       If in 128 mode, contains last OUT to 0x7ffd
 			c = fgetc(fp_in);
-			if (otek) launchmdr_full[launchmdr_full_out] = noc_launchigp[noc_launchigp_out] = c;
+			if (otek) launch_scr[launch_scr_out] = noc_launchstk[noc_launchstk_out] = c;
 			//	36      1       Contains 0xff if Interface I rom paged [SKIPPED]
 			//	37      1       Hardware Modify Byte [SKIPPED]
-			//	38      1       Last OUT to port 0xfffd (soundchip register number) [SKIPPED]
-			//	39      16      Contents of the sound chip registers [SKIPPED] *ideally for 128k setting ay registers make sense, however in practise never found it is needed
-			fseek(fp_in, 19, SEEK_CUR);
+			fseek(fp_in, 2, SEEK_CUR);
+			//	38      1       Last OUT to port 0xfffd (soundchip register number)
+			//	39      16      Contents of the sound chip registers
+			mdrbln[mdrbln_fffd] = fgetc(fp_in);	// last out to $fffd (38)
+			for (i = 0; i < 16; i++) mdrbln[mdrbln_ay + i] = fgetc(fp_in); // ay registers (39-54) 
 			// following is only in v3 snapshots
 			//	55      2       Low T state counter [SKIPPED]
 			//	57      1       Hi T state counter [SKIPPED]
@@ -508,15 +450,15 @@ int main(int argc, char* argv[]) {
 		}
 		if (otek) {
 			// PC
-			launchmdr_full[launchmdr_full_jp] = noc_launchstk[noc_launchstk_jp] = fgetc(fp_in);
-			launchmdr_full[launchmdr_full_jp + 1] = noc_launchstk[noc_launchstk_jp + 1] = fgetc(fp_in);
+			launch_scr[launch_scr_jp] = noc_launchstk[noc_launchstk_jp] = fgetc(fp_in);
+			launch_scr[launch_scr_jp + 1] = noc_launchstk[noc_launchstk_jp + 1] = fgetc(fp_in);
 			// last out to 0x7ffd
-			launchmdr_full[launchmdr_full_out] = noc_launchigp[noc_launchigp_out] = fgetc(fp_in);
+			launch_scr[launch_scr_out] = noc_launchstk[noc_launchstk_out] = fgetc(fp_in);
 			// TD-DOS
 			if (fgetc(fp_in) != 0) error(14);
 			int pagelayout[7];
 			for (i = 0; i < 7; i++) pagelayout[i] = 99;
-			pagelayout[0] = launchmdr_full[launchmdr_full_out] & 7;
+			pagelayout[0] = launch_scr[launch_scr_out] & 7;
 			//
 			if (pagelayout[0] == 0) {
 				pagelayout[0] = 32768;
@@ -623,27 +565,34 @@ int main(int argc, char* argv[]) {
 	fclose(fp_in);
 	//
 	if (snap && !otek) {
-		launchmdr_full[launchmdr_full_jp] = noc_launchstk[noc_launchstk_jp] = main[stackpos - 16384 - 2];
-		launchmdr_full[launchmdr_full_jp + 1] = noc_launchstk[noc_launchstk_jp + 1] = main[stackpos - 16384 - 1];
+		launch_scr[launch_scr_jp] = noc_launchstk[noc_launchstk_jp] = main[stackpos - 16384 - 2];
+		launch_scr[launch_scr_jp + 1] = noc_launchstk[noc_launchstk_jp + 1] = main[stackpos - 16384 - 1];
 	}
 	//
 	if (stackpos < 23296) { // stack in screen?
-		i = launchmdr_full[launchmdr_full_jp + 1] * 256 + launchmdr_full[launchmdr_full_jp] - 16384;
+		i = launch_scr[launch_scr_jp + 1] * 256 + launch_scr[launch_scr_jp] - 16384;
 		if (main[i] == 0x31) { // ld sp,
 			// set-up stack
 			stackpos = main[i + 2] * 256 + main[i + 1];
 			if (stackpos == 0) stackpos = 65536;
 			noc_launchstk_pos = stackpos - noc_launchstk_len; // pos of stack code
-			len.rrrr = noc_launchstk_pos + noc_launchstk_afa;
+			len.rrrr = noc_launchstk_pos + noc_launchstk_af;
 			noc_launchigp[noc_launchigp_rd] = len.r[0];
 			noc_launchigp[noc_launchigp_rd + 1] = len.r[1]; // start of stack within stack
 			fprintf(stdout, "{S:%d}", stackpos);
 		}
 	}
+	else if ((launch_scr[launch_scr_out] & 7) > 0 && stackpos > 49152 && otek) error(7); // stack in paged memory won't work
 	//microdrive settings
 	unsigned char sector = 0xfe; // max size 254 sectors
 	int mdrsize = 137923; // sector * 543 + 1;
-	unsigned char mdrname[] = "Z80onMDR_L";
+	unsigned char mdrname[] = "          ";
+	i = 0;
+	int mp = 0;
+	do {
+		if ((fz80[i] >= 48 && fz80[i] < 58) || (fz80[i] >= 65 && fz80[i] < 91) || (fz80[i] >= 97 && fz80[i] < 123)) mdrname[mp++] = fz80[i];
+		i++;
+	} while (fz80[i] != '.' && mp < 10);
 	// create a blank cartridge in memory
 	unsigned char* cart;
 	if ((cart = (unsigned char*)malloc(mdrsize * sizeof(unsigned char))) == NULL) error(10); // space for the cartridge
@@ -686,55 +635,33 @@ int main(int argc, char* argv[]) {
 	// write run (a)
 	rrrr start;
 	rrrr param;
-	unsigned char mdrfname[] = "run       ";
-	// adjust final randomize usr
-	start.rrrr = 16384;
-	if (oldl == 0) start.rrrr += 6912;
-	mdrbln[mdrbln_usr] = start.r[0];
-	mdrbln[mdrbln_usr+1] =  start.r[1];
-	start.rrrr = 23813;
-	param.rrrr = 0;
-	if (otek) {
-		fprintf(stdout, "128k>");
-	}
-	else {
-		mdrbln[mdrbln_to] = 0x30; // for i=0 to 0 as only one thing to load
-		fprintf(stdout, "48k>");
-	}
-	len.rrrr = mdrbln_len;
-	i = appendmdr(mdrname, mdrfname, cart, &sector, mdrbln, len, start, param, 0x00);
-	fprintf(stdout, "R(%lu)+",len.rrrr);
-	mdrfname[1] = mdrfname[2] = ' ';
+	rrrr cmsize;
 	unsigned char* comp;
 	// main
 	unsigned char* main48k;
-	if ((main48k = (unsigned char*)malloc(49152 * sizeof(unsigned char))) == NULL) error(6); // cannot create space for copy of main memory
-	if ((comp = (unsigned char*)malloc((42240 + 1320) * sizeof(unsigned char))) == NULL) error(8);
 	int delta = 3;
 	int vgap = 0;
 	int vgaps, vgapb;
-	int maxgap, maxpos, maxchr, adjust, stshift;
+	int maxgap, maxpos, maxchr, stshift = 0;
 	int dgap = 0;
-	int startpos = 6912;
-	int mainsize = 42240;
-	if (oldl == 0) {
-		startpos += 256;
-		mainsize -= 256;
+	int startpos = 6966; // 0x5b36 onwards so have to save at least 1562bytes
+	int mainsize = 42186; 
+	if (oldl) {
+		startpos -= noc_launchprt_len;
+		mainsize += noc_launchprt_len;
 	}
-	int pageshift = 42173; // 49152-6912-67
-	int pagedin = noc_launchigp[noc_launchigp_out] & 7; // Bits 0-2: RAM page (0-7) to map into memory at 0xc000.
-	if (pagedin > 0) {
-		pageshift -= 16384;
-	}
+	int maxsize = 40624; // 0x6150 onwards
+	if ((main48k = (unsigned char*)malloc(49152 * sizeof(unsigned char))) == NULL) error(6); // cannot create space for copy of main memory
+	if ((comp = (unsigned char*)malloc((mainsize + 10240) * sizeof(unsigned char))) == NULL) error(8);
 	do {
 		for (i = 0; i < 49152; i++) main48k[i] = main[i]; // create copy of 1st 48k for manipulation
 		// new byte series scan
 		if (oldl == 0) {
 			noc_launchigp_pos = 0;
-			// find gap
+			// find maximum gap
 			maxgap = maxpos = maxchr = 0;
 			for (vgap = 0x00; vgap <= 0xff; vgap++) { // cycle through all bytes
-				for (i = 0, j = 0; i < pageshift; i++) { // also include rest of printer buffer
+				for (i = 0, j = 0; i < mainsize; i++) { // also include rest of printer buffer
 					if (main48k[i + 6912 + noc_launchprt_len] == vgap) {
 						j++;
 						if (j > maxgap && ((i + 6912 + noc_launchprt_len - j) > stackpos - 16384 || // start of gap > stack then ok
@@ -749,89 +676,132 @@ int main(int argc, char* argv[]) {
 					}
 				}
 			}
-			adjust = 0; // start with no adjustments between ingap and stack
 			if (maxgap > (noc_launchigp_len + delta - 3)) {
 				noc_launchigp_pos = maxpos + 6912 + noc_launchprt_len - maxgap; // start of in gap 
 			}
-			else {	// cannot find large enough gap so can we adjust the launcher?
-				i = 0;
-				do {
-					if (maxgap > (noc_launchigp_len + delta - 3) - adjgap[i]) adjust = adjgap[i];
-				} while (++i < 13 && adjust == 0);
-				if (!adjust) {	// if cannot adjust and not gap big enough then use screen attr
-					noc_launchigp_pos = 6912 - (noc_launchigp_len + delta - 3);
-					vgaps = 0x00;
-					vgapb = 0;
-					for (maxchr = 0x00; maxchr <= 0xff; maxchr++) {	//find most common attr
-						for (i = noc_launchigp_pos, j = 0; i < 6912; i++) {
-							if (main48k[i] == maxchr) j++;
-						}
-						if (j >= vgapb) {
-							vgapb = j;
-							vgaps = maxchr;
-						}
+			else {	// cannot find large enough gap so use screen attr
+				noc_launchigp_pos = 6912 - (noc_launchigp_len + delta - 3);
+				vgaps = 0x00;
+				vgapb = 0;
+				for (maxchr = 0x00; maxchr <= 0xff; maxchr++) {	//find most common attr
+					for (i = noc_launchigp_pos, j = 0; i < 6912; i++) {
+						if (main48k[i] == maxchr) j++;
 					}
-					maxchr = vgaps;
+					if (j >= vgapb) {
+						vgapb = j;
+						vgaps = maxchr;
+					}
 				}
-				else {	// can adjust to get gap to fit pos
-					noc_launchigp_pos = maxpos + 6912 + noc_launchprt_len - maxgap; // adjust
-				}
+				maxchr = vgaps;
 			}
 			// is pc in the way?
-			if (noc_launchstk_pos - adjust <= (noc_launchstk[noc_launchstk_jp + 1] * 256 + noc_launchstk[noc_launchstk_jp]) &&
+			if (noc_launchstk_pos <= (noc_launchstk[noc_launchstk_jp + 1] * 256 + noc_launchstk[noc_launchstk_jp]) &&
 					noc_launchstk_pos + noc_launchstk_len > (noc_launchstk[noc_launchstk_jp + 1] * 256 + noc_launchstk[noc_launchstk_jp])) {
 				stshift = stackpos - (noc_launchstk[noc_launchstk_jp + 1] * 256 + noc_launchstk[noc_launchstk_jp]); // stack - pc
-				if (stshift <= 4) error(13);
-				stshift = 28; // shift equivalent of 32bytes below where is was (4bytes still remain under the stack)
-			}
-			else {
-				stshift = 0;
+				if (stshift <= 2) error(13);
+				stshift = noc_launchstk_af; // shift equivalent of 32bytes below where is was (4bytes still remain under the stack)
 			}
 			start.rrrr = noc_launchigp_pos + 16384;
 			noc_launchprt[noc_launchprt_jp] = start.r[0];
 			noc_launchprt[noc_launchprt_jp + 1] = start.r[1]; // jump into gap
-			start.rrrr = noc_launchigp_pos + noc_launchigp_begin + 16384 - adjust;
+			start.rrrr = noc_launchigp_pos + noc_launchigp_begin + 16384;
 			noc_launchigp[noc_launchigp_bdata] = start.r[0];
 			noc_launchigp[noc_launchigp_bdata + 1] = start.r[1]; // bdata start
 			noc_launchigp[noc_launchigp_lcs] = delta;
-			noc_launchigp[noc_launchigp_clr] = noc_launchigp_len + delta - 3 - adjust; // size of ingap clear
+			if (noc_launchigp_len + delta - 3 == 256) {
+				noc_launchigp[noc_launchigp_clr] = 0x00;
+			}
+			else {
+				noc_launchigp[noc_launchigp_clr] = noc_launchigp_len + delta - 3; // size of ingap clear
+			}
 			noc_launchigp[noc_launchigp_chr] = maxchr; // set the erase char in stack code
-			start.rrrr = noc_launchstk_pos - adjust - stshift;
+			start.rrrr = noc_launchstk_pos - stshift;
 			noc_launchigp[noc_launchigp_jp] = start.r[0];
 			noc_launchigp[noc_launchigp_jp + 1] = start.r[1]; // jump to stack code - adjust - shift
 			// copy stack routine under stack, split version if shift
 			if (stshift) {
-				for (i = 0; i < noc_launchstk_len - 4; i++) main48k[noc_launchstk_pos - 16384 + i - stshift] = noc_launchstk[i];
-				//final 4byte just below new code
-				for (i = 0; i < 4; i++) main48k[stackpos - 16384 + i - 4] = noc_launchstk[noc_launchstk_len - 4 + i];
+				for (i = 0; i < noc_launchstk_len - 2; i++) main48k[noc_launchstk_pos - 16384 + i - stshift] = noc_launchstk[i];
+				//final 2bytes just below new code
+				for (i = 0; i < 2; i++) main48k[stackpos - 16384 + i - 2] = noc_launchstk[noc_launchstk_len - 2 + i];
 			}
 			else {
 				for (i = 0; i < noc_launchstk_len; i++) main48k[noc_launchstk_pos - 16384 + i] = noc_launchstk[i]; // standard copy
 			}
-			//reduce ingap code and add to stack routine
-			if (adjust) {
-				for (i = 0; i < adjust; i++) main48k[noc_launchstk_pos - 16384 + i - adjust - stshift] =
-					noc_launchigp[noc_launchigp_begin - adjust - 3 + i];
-			}
 			// if ingap not in screen attr, this is done after so as to not effect the screen compression
-			if (noc_launchigp_pos > 6912) {
+			if (noc_launchigp_pos >= 6912) {
 				// copy prtbuf to code
-				for (i = 0; i < noc_launchprt_len; i++) main48k[noc_launchigp_pos + noc_launchigp_begin + delta + i - adjust] = main48k[6912 + i];
+				for (i = 0; i < noc_launchprt_len; i++) main48k[noc_launchigp_pos + noc_launchigp_begin + delta + i] = main48k[6912 + i];
 				// copy delta to code
-				for (i = 0; i < delta; i++) main48k[noc_launchigp_pos + noc_launchigp_begin + i - adjust] = main48k[49152 - delta + i];
+				for (i = 0; i < delta; i++) main48k[noc_launchigp_pos + noc_launchigp_begin + i] = main48k[49152 - delta + i];
 				// copy in compression routine into main
-				for (i = 0; i < noc_launchigp_begin - adjust - 3; i++) main48k[noc_launchigp_pos + i] = noc_launchigp[i];
-				// last jp
-				for (i = 0; i < 3; i++) main48k[noc_launchigp_pos + noc_launchigp_begin - adjust - 3 + i] =
-					noc_launchigp[noc_launchigp_begin - 3 + i];
+				for (i = 0; i < noc_launchigp_begin; i++) main48k[noc_launchigp_pos + i] = noc_launchigp[i];
 			}
 		}
-		len.rrrr = zxsc(&main48k[startpos], comp, mainsize - delta, 0); // upto the full size - delta
-		dgap = decompressf(comp, len.rrrr, mainsize);
+		cmsize.rrrr = zxsc(&main48k[startpos], &comp[8704], mainsize - delta, 0); // upto the full size - delta
+		dgap = decompressf(&comp[8704], cmsize.rrrr, mainsize);
 		delta += dgap;
 		if (delta > B_GAP) error(9);
 	} while (dgap > 0);
-	if (len.rrrr > 40704 - delta) error(9); // too big to fit in Spectrum memory, 0x6100 lowest point
+	// sort out adder
+	int adder = 0;
+	if (oldl) {
+		adder = launch_scr_len + delta - 3; // add launcher + delta
+	}
+	else {
+		adder = noc_launchprt_len; // just add prtbuf launcher
+		if (noc_launchigp_pos < 6912) adder += noc_launchprt_len + delta + noc_launchigp_begin; // if ingap in screen 
+	}
+	maxsize -= delta;
+	cmsize.rrrr += adder;
+	if (delta > B_GAP || cmsize.rrrr > maxsize) error(9); // too big to fit in Spectrum memory
+	// BASIC
+	unsigned char mdrfname[] = "run       ";
+	// sort out compression start
+	int launch_start = 23296 + 2;
+	if (oldl) {
+		launch_start = 16384;
+		len.rrrr = launch_start;
+		mdrbln[mdrbln_cpyf] = len.r[0];
+		mdrbln[mdrbln_cpyf + 1] = len.r[1];
+		len.rrrr = adder; // how many to copy
+		mdrbln[mdrbln_cpyx] = len.r[0];
+		mdrbln[mdrbln_cpyx + 1] = len.r[1];
+		len.rrrr = 16384 + launch_scr_af;  // change stack
+		mdrbln[mdrbln_ts] = len.r[0]; // stack
+		mdrbln[mdrbln_ts + 1] = len.r[1];
+		start.rrrr = 16384 + launch_scr_delta;
+		launch_scr[launch_scr_lcf] = start.r[0];
+		launch_scr[launch_scr_lcf + 1] = start.r[1];
+		launch_scr[launch_scr_lcs] = delta; //adjust last copy for delta **fix
+	}
+	else if(noc_launchigp_pos < 6912) {
+		len.rrrr = 23296 + noc_launchprt_len - adder; // compress start
+		mdrbln[mdrbln_cpyf] = len.r[0];
+		mdrbln[mdrbln_cpyf + 1] = len.r[1];
+		len.rrrr = adder;
+		mdrbln[mdrbln_cpyx] = len.r[0];
+		mdrbln[mdrbln_cpyx + 1] = len.r[1];
+	}
+	len.rrrr = launch_start;
+	mdrbln[mdrbln_jp] = len.r[0];
+	mdrbln[mdrbln_jp + 1] = len.r[1];
+	// sort out compression start
+	len.rrrr = 65536 - cmsize.rrrr; // compress start
+	mdrbln[mdrbln_fcpy] = len.r[0];
+	mdrbln[mdrbln_fcpy + 1] = len.r[1];
+	start.rrrr = 23813;
+	param.rrrr = 0;
+	if (otek) {
+		fprintf(stdout, "128k>");
+	}
+	else {
+		mdrbln[mdrbln_to] = 0x30; // for i=0 to 0 as only one thing to load
+		fprintf(stdout, "48k>");
+	}
+	len.rrrr = mdrbln_len;
+	i = appendmdr(mdrname, mdrfname, cart, &sector, mdrbln, len, start, param, 0x00);
+	fprintf(stdout, "R(%lu)+", len.rrrr);
+	mdrfname[1] = mdrfname[2] = ' ';
 	// screen **v1.3 moved here in case stack within screen
 	unsigned char* comp_s;
 	rrrr len_s;
@@ -890,57 +860,35 @@ int main(int argc, char* argv[]) {
 		i = appendmdr(mdrname, mdrfname, cart, &sector, comp_p, len_p, start, param, 0x03);
 		free(comp_p);
 	}
-	// write main (d)
-	mdrfname[0] = 'M';
-	start.rrrr = 65536 - len.rrrr;
-	param.rrrr = 0xffff;
-	i = appendmdr(mdrname, mdrfname, cart, &sector, comp, len, start, param, 0x03);
-	fprintf(stdout, "M(%lu:D%d)+", len.rrrr, delta);
-	//
-	free(comp);
 	free(main);
-	//launcher
-	len.rrrr = 65536 - len.rrrr; // start of compression
-	launchmdr_full[launchmdr_full_cp] = noc_launchprt[noc_launchprt_cp] = len.r[0];
-	launchmdr_full[launchmdr_full_cp + 1] = noc_launchprt[noc_launchprt_cp + 1] = len.r[1];
-	// write launcher (e)
-	mdrfname[0] = 'L';
-	// if new then launcher in prtbuf
-	if (oldl == 0) { 
-		start.rrrr = 23296;
-		len.rrrr = 256;
-		startpos = 6912;
-		if (noc_launchigp_pos < 6912) {
-			for (i = 0; i < noc_launchprt_len; i++) main48k[noc_launchigp_pos + noc_launchigp_begin + delta + i] = main48k[6912 + i]; // copy prtbuf to screen
-			for (i = 0; i < delta; i++) main48k[noc_launchigp_pos + noc_launchigp_begin + i] = main48k[49152 - delta + i]; // copy delta to screen
-			for (i = 0; i < noc_launchigp_begin; i++) main48k[noc_launchigp_pos + i] = noc_launchigp[i]; // copy in compression routine into screen
-			start.rrrr = 23296 - (noc_launchigp_len + delta - 3);
-			len.rrrr = 256 + (noc_launchigp_len + delta - 3);
-			startpos -= (noc_launchigp_len + delta - 3);
-		}
-		for (i = 0; i < noc_launchprt_len; i++) main48k[i + 6912] = noc_launchprt[i]; // copy experimental loader into prtbuf
-		i = appendmdr(mdrname, mdrfname, cart, &sector, &main48k[startpos], len, start, param, 0x03);
+	// main load
+	if (oldl) {
+		//copy launcher & delta to screen or prtbuff
+		for (i = 0; i < launch_scr_delta; i++) comp[i + 8704 - adder] = launch_scr[i];
+		for (i = 0; i < delta; i++) comp[i + 8704 - adder + launch_scr_delta] = main48k[49152 - delta + i];
 	}
-	// if old then in screen
 	else {
-		launchmdr_full[launchmdr_full_lcs] = delta; //adjust last copy for delta *old launcher only
-		for (i = 0; i < delta; i++) launchmdr_full[launchmdr_full_len + i] = main48k[49152 - delta + i]; //copy end delta*bytes to launcher *old launcher only
-		len.rrrr = launchmdr_full_len + delta;
-		start.rrrr = 16384;
-		i = appendmdr(mdrname, mdrfname, cart, &sector, launchmdr_full, len, start, param, 0x03);
+		if (noc_launchigp_pos < 6912) {
+			// copy prtbuf to ingap code 
+			for (i = 0; i < noc_launchigp_begin; i++) comp[i + 8704 - adder] = noc_launchigp[i];
+			for (i = 0; i < delta; i++) comp[i + 8704 - adder + noc_launchigp_begin] = main48k[49152 - delta + i];
+			for (i = 0; i < noc_launchprt_len; i++) comp[i + 8704 - adder + noc_launchigp_begin + delta] = main48k[6912 + i];
+		}
+		for (i = 0; i < noc_launchprt_len; i++) comp[i + 8704 - noc_launchprt_len] = noc_launchprt[i];
 	}
 	free(main48k);
+	// write main
+	mdrfname[0] = 'M';
+	start.rrrr = 65536 - cmsize.rrrr;
+	param.rrrr = 0xffff;
+	i = appendmdr(mdrname, mdrfname, cart, &sector, &comp[8704 - adder], cmsize, start, param, 0x03);
+	fprintf(stdout, "M(%lu:D%d", cmsize.rrrr, delta);
+	if (stshift) fprintf(stdout, "{S^}");
+	//
+	free(comp);
 	//count blank sectors to determine space
 	for (i = 0xfe, j = 0; i > 0; i--) {
 		if (cart[(0xfe - i) * 543 + 15] == 0x00) j++;
-	}
-	fprintf(stdout, "L(%lu", len.rrrr);
-	if (stshift || adjust || pagedin) {
-		fprintf(stdout, "{");
-		if (pagedin) fprintf(stdout, "P:%d", pagedin);
-		if (stshift) fprintf(stdout, "S^");
-		if (adjust) fprintf(stdout, "A:%d", adjust);
-		fprintf(stdout, "}");
 	}
 	fprintf(stdout, ")>T(%d<->%d)\n", (254 - j) * 543, j * 543); // updated for interleave
 	// create file and write cartridge
