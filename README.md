@@ -20,6 +20,7 @@ Z80onMDR_Lite - Simple ZX Spectrum Z80 snapshot to Microdrive MDR image converte
     v1.5 handle SNA snapshots (48k only)
     v1.51 handle non-standard border colours
     v1.6 handle 128k SNA snapshots
+    v1.7 combined basic loader for 128k & 48k so usr0 mode is always used even for 48k snapshots to help with compatibility, optimised screen decompression code
 
 A cut down version of the full Z80onMDR https://tomdalby.com/other/z80onmdr.html 
 to use with or within other utilities under the GPL3.0 licence. Only converts
