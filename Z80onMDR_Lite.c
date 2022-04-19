@@ -592,7 +592,7 @@ int main(int argc, char* argv[]) {
 	do {
 		if ((fz80[i] >= 48 && fz80[i] < 58) || (fz80[i] >= 65 && fz80[i] < 91) || (fz80[i] >= 97 && fz80[i] < 123)) mdrname[mp++] = fz80[i];
 		i++;
-	} while (fz80[i] != '.' && mp < 10);
+	} while (i < strlen(fz80) - 4 && mp < 10);
 	// create a blank cartridge in memory
 	unsigned char* cart;
 	if ((cart = (unsigned char*)malloc(mdrsize * sizeof(unsigned char))) == NULL) error(10); // space for the cartridge
